@@ -15,12 +15,39 @@ import (
 
 // cfTrack follows one published signal's counterfactual bracket for the ML dataset.
 type cfTrack struct {
-	sig    Signal
-	day    string
-	traded bool
-	gate   int // 0 = no model yet (warmup), 1 = gate accepted, 2 = gate rejected
-	predR  float64
+	sig       Signal
+	day       string
+	traded    bool
+	gate      int // 0 = no model yet (warmup), 1 = gate accepted, 2 = gate rejected
+	predR     float64
+	todBucket int // half-hour-of-session index of the signal (for #3 conditioning)
+	dayState  int // market state of the signal's day: 1 = risk-on, 0 = risk-off (#4)
 }
+
+// runStat is an online mean tracker for the conditioning gates (#3/#4).
+type runStat struct {
+	n   int
+	sum float64
+}
+
+func (s *runStat) add(r float64) { s.n++; s.sum += r }
+func (s *runStat) blocks() bool  { return s.n >= condMinSamples && s.sum/float64(s.n) < 0 }
+
+// ewmaStat is the sizing throttle's tracker (#6).
+type ewmaStat struct {
+	n    int
+	mean float64
+}
+
+func (s *ewmaStat) add(r float64) {
+	s.n++
+	if s.n == 1 {
+		s.mean = r
+		return
+	}
+	s.mean = (1-throttleAlpha)*s.mean + throttleAlpha*r
+}
+func (s *ewmaStat) halves() bool { return s.n >= condMinSamples && s.mean < 0 }
 
 // BTConfig configures a backtest run. Limits are the same risk guardrails the live-paper
 // pipeline will trade under, so backtest results and paper results are comparable.
@@ -50,7 +77,42 @@ type BTConfig struct {
 	// below its 20-day moving average (computed from prior days only — no lookahead).
 	// Long-only bounce/momentum strategies have no business fighting a falling tape.
 	RegimeFilter bool
+
+	// ---- Tier-1 research mechanisms (RESEARCH_BACKLOG). All rules pre-registered; ----
+	// ---- all statistics learned online from outcomes resolved BEFORE the entry.   ----
+
+	// MLTopQuantile (#2, with an external ranking-model predictions file): accept a
+	// signal only if its score is at/above this quantile of the SAME strategy's scores
+	// from PRIOR days (causal top-K approximation; needs ≥ condMinScores prior scores,
+	// else warmup pass-through). Overrides the absolute-margin rule.
+	MLTopQuantile float64
+	// TODFilter (#3): block a (strategy, half-hour-of-session) bucket once ≥
+	// condMinSamples resolved outcomes show a negative mean R for that bucket.
+	TODFilter bool
+	// RegimeRouter (#4): block a (strategy, market-state) pair — state = QQQ prior
+	// close above/below its 20-day MA — once ≥ condMinSamples resolved outcomes show a
+	// negative mean R for that pair. Soft routing: other strategies keep trading.
+	RegimeRouter bool
+	// PassiveEntry (#5): instead of a market fill at signal close + slippage, rest a
+	// limit at the signal price for passiveWindowMin minutes; fill (at the limit, no
+	// slippage) only if price trades through it, else the trade is missed.
+	PassiveEntry bool
+	// Throttle (#6): halve position size for a strategy whose EWMA of realized R
+	// (α = throttleAlpha, ≥ condMinSamples observations) is negative.
+	Throttle bool
+	// MinEntryMinute blocks ENTRIES (signals still journal) before this session minute —
+	// the operator's "avoid the first N minutes" rule (e.g. 65 = no entries before
+	// 10:35 ET). 0 = off.
+	MinEntryMinute int
 }
+
+// Pre-registered Tier-1 constants — fixed before any experiment ran; never swept.
+const (
+	condMinSamples   = 30   // outcomes required before a conditioning bucket may block
+	condMinScores    = 100  // prior scores required before the top-quantile gate applies
+	passiveWindowMin = 5    // minutes a passive limit rests before it is cancelled
+	throttleAlpha    = 0.05 // EWMA weight for the sizing throttle
+)
 
 // DatasetRow is one ML training example: a signal's features and what its bracket did.
 type DatasetRow struct {
@@ -139,9 +201,18 @@ type BTResult struct {
 	GateRejectedAvgR float64 `json:"gate_rejected_avg_r,omitempty"`
 
 	// Regime-filter accounting.
-	RegimeOn       bool `json:"regime_on,omitempty"`
-	StandDownDays  int  `json:"stand_down_days,omitempty"`
-	SkippedRegime  int  `json:"skipped_regime,omitempty"` // signals blocked on stand-down days
+	RegimeOn      bool `json:"regime_on,omitempty"`
+	StandDownDays int  `json:"stand_down_days,omitempty"`
+	SkippedRegime int  `json:"skipped_regime,omitempty"` // signals blocked on stand-down days
+
+	// Tier-1 mechanism accounting.
+	SkippedEarly    int `json:"skipped_early,omitempty"`    // min-entry-minute blocked entries
+	SkippedTOD      int `json:"skipped_tod,omitempty"`      // #3 blocked entries
+	SkippedRouter   int `json:"skipped_router,omitempty"`   // #4 blocked entries
+	PassiveAttempts int `json:"passive_attempts,omitempty"` // #5 limit orders rested
+	PassiveFills    int `json:"passive_fills,omitempty"`    // #5 filled
+	PassiveMisses   int `json:"passive_misses,omitempty"`   // #5 expired unfilled
+	ThrottledHalf   int `json:"throttled_half,omitempty"`   // #6 half-sized entries
 }
 
 // btPosition is one open simulated position.
@@ -149,6 +220,13 @@ type btPosition struct {
 	sig   Signal
 	entry float64
 	qty   float64
+}
+
+// pendingEntry is a passive limit order resting at the signal price (#5).
+type pendingEntry struct {
+	sig     Signal
+	cf      *cfTrack
+	expires int64
 }
 
 // RunBacktest replays historical 1-minute bars through the SAME detectors the live engine
@@ -269,7 +347,22 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	if len(cfg.Predictions) > 0 {
 		res.GateOn = true
 	}
-	trackCF := dataset != nil || gate != nil || len(cfg.Predictions) > 0
+	// The conditioning mechanisms learn from resolved counterfactual rows, so any of
+	// them being on requires counterfactual tracking.
+	trackCF := dataset != nil || gate != nil || len(cfg.Predictions) > 0 ||
+		cfg.TODFilter || cfg.RegimeRouter || cfg.Throttle
+
+	// #2: causal per-strategy score thresholds — for each day, the q-quantile of that
+	// strategy's prediction scores on STRICTLY PRIOR days.
+	var topqThreshold map[string]map[string]float64 // strategy -> day -> threshold
+	if cfg.MLTopQuantile > 0 && len(cfg.Predictions) > 0 {
+		topqThreshold = buildTopqThresholds(cfg.Predictions, cfg.MLTopQuantile, loc)
+	}
+
+	// Online conditioning statistics (#3, #4, #6), fed by writeRow as outcomes resolve.
+	todStats := map[string]*runStat{}      // "strategy|halfHourBucket"
+	routerStats := map[string]*runStat{}   // "strategy|dayState"
+	throttleStats := map[string]*ewmaStat{} // "strategy"
 	var trainRows []DatasetRow
 	writeRow := func(cf *cfTrack, exit float64, exitTime int64, reason string) {
 		risk := cf.sig.Suggested.Entry - cf.sig.Suggested.Stop
@@ -285,6 +378,24 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 			MinutesHeld: (exitTime - cf.sig.Time) / 60, Traded: cf.traded,
 		}
 		trainRows = append(trainRows, row)
+		// Feed the online conditioning stats (#3/#4/#6) — timeline-respecting: this
+		// outcome is only known now, and only future entries see the updated stat.
+		if k := cf.sig.Strategy + "|" + strconv.Itoa(cf.todBucket); true {
+			if todStats[k] == nil {
+				todStats[k] = &runStat{}
+			}
+			todStats[k].add(r)
+		}
+		if k := cf.sig.Strategy + "|" + strconv.Itoa(cf.dayState); true {
+			if routerStats[k] == nil {
+				routerStats[k] = &runStat{}
+			}
+			routerStats[k].add(r)
+		}
+		if throttleStats[cf.sig.Strategy] == nil {
+			throttleStats[cf.sig.Strategy] = &ewmaStat{}
+		}
+		throttleStats[cf.sig.Strategy].add(r)
 		if res.GateOn {
 			ss := res.PerStrategy[cf.sig.Strategy]
 			switch cf.gate {
@@ -319,10 +430,11 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	dayCnt := map[string]int{}
 
 	// Regime posture per day: risk-on iff QQQ's PRIOR close is above its 20-day SMA of
-	// prior closes. Uses daily bars only — no intraday lookahead.
+	// prior closes. Uses daily bars only — no intraday lookahead. Needed by both the
+	// hard filter and the soft router (#4).
 	riskOn := map[string]bool{}
-	if cfg.RegimeFilter {
-		res.RegimeOn = true
+	if cfg.RegimeFilter || cfg.RegimeRouter {
+		res.RegimeOn = cfg.RegimeFilter
 		qqq := append([]Bar(nil), dailyBars["QQQ"]...)
 		sort.Slice(qqq, func(i, j int) bool { return qqq[i].Time < qqq[j].Time })
 		for _, day := range days {
@@ -381,9 +493,14 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 		session := map[string][]Bar{}  // per-symbol bars so far today
 		cumVol := map[string]float64{} // per-symbol cumulative volume
 		openPos := map[string]*btPosition{}
-		cfOpen := map[string][]*cfTrack{} // unresolved counterfactuals (dataset mode)
+		cfOpen := map[string][]*cfTrack{}   // unresolved counterfactuals (dataset mode)
+		pendings := map[string]*pendingEntry{} // resting passive limits (#5)
 		dayStart := len(res.Trades)
 		dayHalted := false
+		dayState := 0 // #4: 1 = risk-on, 0 = risk-off
+		if riskOn[day] {
+			dayState = 1
+		}
 
 		closePos := func(p *btPosition, exit float64, exitTime int64, reason string, slipped bool) {
 			if slipped {
@@ -456,6 +573,46 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				}
 			}
 
+			// 1b) Passive limit orders (#5): fill if this bar traded through the limit,
+			// expire after the resting window. Slots and the loss cap are re-checked at
+			// FILL time (the order doesn't reserve a slot while resting). On the fill
+			// bar only the STOP is checked (intrabar entry→target order is unknowable;
+			// counting a same-bar target would be optimistic, a same-bar stop is not).
+			if pe := pendings[sym]; pe != nil && b.Time > pe.sig.Time {
+				switch {
+				case b.Time > pe.expires:
+					delete(pendings, sym)
+					res.PassiveMisses++
+				case b.Low <= pe.sig.Suggested.Entry:
+					delete(pendings, sym)
+					_, held := openPos[sym]
+					if !held && dayTracker.CanEnter(len(openPos), time.Unix(b.Time, 0)) == nil {
+						qty := cfg.Limits.Size(pe.sig.Suggested.Entry, pe.sig.Suggested.Stop)
+						if cfg.Throttle {
+							if ts := throttleStats[pe.sig.Strategy]; ts != nil && ts.halves() {
+								qty = float64(int(qty / 2))
+								res.ThrottledHalf++
+							}
+						}
+						if qty >= 1 {
+							p := &btPosition{sig: pe.sig, entry: pe.sig.Suggested.Entry, qty: qty}
+							openPos[sym] = p
+							res.PassiveFills++
+							if pe.cf != nil {
+								pe.cf.traded = true
+							}
+							if b.Low <= pe.sig.Suggested.Stop {
+								closePos(p, pe.sig.Suggested.Stop, b.Time, "stop", true)
+							}
+						} else {
+							res.SkippedSize++
+						}
+					} else {
+						res.SkippedRisk++
+					}
+				}
+			}
+
 			// 2) Detection — context symbols only feed the market backdrop.
 			if !uni.Has(sym) {
 				continue
@@ -490,21 +647,31 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				cool[key] = sig.Time
 				dayCnt[key+"|"+day]++
 				res.PerStrategy[strat.Name()].Signals++
+				todBucket := minuteOf(sig.Time, open) / 30
 				var cf *cfTrack
 				if trackCF {
-					cf = &cfTrack{sig: *sig, day: day}
+					cf = &cfTrack{sig: *sig, day: day, todBucket: todBucket, dayState: dayState}
 					cfOpen[sym] = append(cfOpen[sym], cf)
 				}
-				// ML gate: trade only when the model expects positive R. Signals still
-				// in warmup (no model / no score yet) trade ungated.
+				// ML gate: trade only when the model expects positive R (absolute margin)
+				// or the score clears the causal per-strategy top quantile (#2). Signals
+				// still in warmup (no model / no score / no threshold yet) trade ungated.
 				var gateOK, gateApplied bool
 				var predR float64
 				if gate != nil {
 					gateOK, predR, gateApplied = gate.Allow(*sig)
 				} else if len(cfg.Predictions) > 0 {
 					if v, found := cfg.Predictions[sig.Strategy+"|"+sym+"|"+strconv.FormatInt(sig.Time, 10)]; found {
-						predR, gateApplied = v, true
-						gateOK = v >= margin
+						predR = v
+						if topqThreshold != nil {
+							if thr, ok := topqThreshold[sig.Strategy][day]; ok {
+								gateApplied = true
+								gateOK = v >= thr
+							}
+						} else {
+							gateApplied = true
+							gateOK = v >= margin
+						}
 					}
 				}
 				if gateApplied && cf != nil {
@@ -518,6 +685,25 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				if gateApplied && !gateOK {
 					continue
 				}
+				// Operator rule: no entries before session minute N.
+				if cfg.MinEntryMinute > 0 && minuteOf(sig.Time, open) < cfg.MinEntryMinute {
+					res.SkippedEarly++
+					continue
+				}
+				// #3: block (strategy, time-of-day) buckets with proven negative expectancy.
+				if cfg.TODFilter {
+					if st := todStats[sig.Strategy+"|"+strconv.Itoa(todBucket)]; st != nil && st.blocks() {
+						res.SkippedTOD++
+						continue
+					}
+				}
+				// #4: block (strategy, market-state) pairs with proven negative expectancy.
+				if cfg.RegimeRouter {
+					if st := routerStats[sig.Strategy+"|"+strconv.Itoa(dayState)]; st != nil && st.blocks() {
+						res.SkippedRouter++
+						continue
+					}
+				}
 				if standDown {
 					res.SkippedRegime++
 					continue // posture brake: signal logged, no entry
@@ -525,11 +711,28 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				if _, held := openPos[sym]; held {
 					continue // one position per symbol
 				}
+				if pendings[sym] != nil {
+					continue // one working order per symbol
+				}
+				// #5: passive entry — rest a limit at the signal price instead of paying
+				// the spread; slots/loss-cap are re-checked at fill time.
+				if cfg.PassiveEntry {
+					pendings[sym] = &pendingEntry{sig: *sig, cf: cf, expires: sig.Time + passiveWindowMin*60}
+					res.PassiveAttempts++
+					continue
+				}
 				if err := dayTracker.CanEnter(len(openPos), time.Unix(b.Time, 0)); err != nil {
 					res.SkippedRisk++
 					continue
 				}
 				qty := cfg.Limits.Size(sig.Suggested.Entry, sig.Suggested.Stop)
+				// #6: half-size strategies whose realized-R EWMA has gone negative.
+				if cfg.Throttle {
+					if ts := throttleStats[sig.Strategy]; ts != nil && ts.halves() {
+						qty = float64(int(qty / 2))
+						res.ThrottledHalf++
+					}
+				}
 				if qty < 1 {
 					res.SkippedSize++
 					continue
@@ -541,6 +744,9 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				}
 			}
 		}
+
+		// Passive limits still resting at the close expire unfilled.
+		res.PassiveMisses += len(pendings)
 
 		// Safety: close anything still open at its last seen price (thin data days).
 		for _, p := range openPos {
@@ -639,6 +845,50 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	return res
 }
 
+// buildTopqThresholds computes, per strategy per day, the q-quantile of that strategy's
+// prediction scores on strictly prior days (the causal top-K approximation for #2).
+// Days with fewer than condMinScores prior scores get no threshold (warmup pass-through).
+func buildTopqThresholds(preds map[string]float64, q float64, loc *time.Location) map[string]map[string]float64 {
+	type scored struct {
+		day   string
+		score float64
+	}
+	byStrat := map[string][]scored{}
+	for k, v := range preds {
+		parts := strings.SplitN(k, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		t, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		day := time.Unix(t, 0).In(loc).Format("2006-01-02")
+		byStrat[parts[0]] = append(byStrat[parts[0]], scored{day, v})
+	}
+	out := map[string]map[string]float64{}
+	for strat, list := range byStrat {
+		sort.Slice(list, func(i, j int) bool { return list[i].day < list[j].day })
+		out[strat] = map[string]float64{}
+		var prior []float64
+		i := 0
+		for i < len(list) {
+			day := list[i].day
+			if len(prior) >= condMinScores {
+				sorted := append([]float64(nil), prior...)
+				sort.Float64s(sorted)
+				idx := int(q * float64(len(sorted)-1))
+				out[strat][day] = sorted[idx]
+			}
+			for i < len(list) && list[i].day == day {
+				prior = append(prior, list[i].score)
+				i++
+			}
+		}
+	}
+	return out
+}
+
 // trailingStats computes ATR(14) + 20-day avg volume from prior daily bars.
 func trailingStats(prior []Bar) dailyStats {
 	n := len(prior)
@@ -701,6 +951,22 @@ func (r *BTResult) Report() string {
 	fmt.Fprintf(&b, "Skipped by risk caps: %d   ·   Unfundable (<1 share): %d\n", r.SkippedRisk, r.SkippedSize)
 	if r.RegimeOn {
 		fmt.Fprintf(&b, "Regime filter: %d stand-down days · %d signals blocked\n", r.StandDownDays, r.SkippedRegime)
+	}
+	if r.SkippedEarly > 0 {
+		fmt.Fprintf(&b, "Min-entry-minute rule: %d entries blocked\n", r.SkippedEarly)
+	}
+	if r.SkippedTOD > 0 {
+		fmt.Fprintf(&b, "Time-of-day filter: %d entries blocked\n", r.SkippedTOD)
+	}
+	if r.SkippedRouter > 0 {
+		fmt.Fprintf(&b, "Regime router: %d entries blocked\n", r.SkippedRouter)
+	}
+	if r.PassiveAttempts > 0 {
+		fmt.Fprintf(&b, "Passive entry: %d rested · %d filled (%.0f%%) · %d missed\n",
+			r.PassiveAttempts, r.PassiveFills, float64(r.PassiveFills)/float64(r.PassiveAttempts)*100, r.PassiveMisses)
+	}
+	if r.ThrottledHalf > 0 {
+		fmt.Fprintf(&b, "Sizing throttle: %d entries half-sized\n", r.ThrottledHalf)
 	}
 	if r.GateOn {
 		fmt.Fprintf(&b, "ML gate: accepted %d (cf avg R %+.3f)  ·  rejected %d (cf avg R %+.3f)  ·  warmup %d\n",

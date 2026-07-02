@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +58,13 @@ func main() {
 	mlmargin := flag.Float64("mlmargin", 0.03, "ML gate: minimum predicted R to take a trade")
 	mlpred := flag.String("mlpred", "", "gate entries from an external predictions JSONL (strategy/symbol/time/pred_r), e.g. the LightGBM trainer's output")
 	regime := flag.Bool("regime", false, "market-posture brake: no new entries when QQQ's prior close is below its 20-day MA")
+	mltopq := flag.Float64("mltopq", 0, "with -mlpred: accept only scores >= this quantile of the strategy's PRIOR-day scores (e.g. 0.70)")
+	tod := flag.Bool("tod", false, "block (strategy, half-hour) buckets with proven negative expectancy (online, walk-forward)")
+	router := flag.Bool("router", false, "block (strategy, market-state) pairs with proven negative expectancy (online, walk-forward)")
+	passive := flag.Bool("passive", false, "passive limit entries at the signal price (5-min rest) instead of market fills")
+	throttle := flag.Bool("throttle", false, "half-size strategies whose realized-R EWMA is negative")
+	minEntry := flag.Int("minentry", 0, "block entries before this session minute (65 = no entries before 10:35 ET)")
+	open30 := flag.Bool("open30", false, "analysis mode: does the first-30-min move predict the rest of the day? (no backtest)")
 	noCache := flag.Bool("nocache", false, "bypass the on-disk bar cache")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
@@ -69,6 +77,11 @@ func main() {
 	log.Printf("universe: %d tradable symbols + %d context (%s)", len(uni.Symbols()), len(uni.Context()), strings.Join(uni.Context(), ","))
 
 	data := loadBars(uni, *days, *noCache)
+
+	if *open30 {
+		analyzeOpen30(uni, data.Minute)
+		return
+	}
 
 	limits := risk.Limits{
 		DailyLossCapUSD:    *lossCap,
@@ -88,10 +101,16 @@ func main() {
 		Strategies:  strategiesWith(*mstop, *mtarget, *mhold),
 		DayFrom:      *dayFrom,
 		DayTo:        *dayTo,
-		DatasetPath:  *dataset,
-		MLGate:       *mlgate,
-		MLGateMargin: *mlmargin,
-		RegimeFilter: *regime,
+		DatasetPath:   *dataset,
+		MLGate:        *mlgate,
+		MLGateMargin:  *mlmargin,
+		RegimeFilter:  *regime,
+		MLTopQuantile:  *mltopq,
+		TODFilter:      *tod,
+		RegimeRouter:   *router,
+		PassiveEntry:   *passive,
+		Throttle:       *throttle,
+		MinEntryMinute: *minEntry,
 	}
 	if *mlpred != "" {
 		preds, err := loadPredictions(*mlpred)
@@ -127,6 +146,7 @@ func strategiesWith(mstop, mtarget float64, mhold int) []signals.Strategy {
 		signals.MomentumContinuation{StopATR: mstop, TargetATR: mtarget, MaxHoldMin: mhold},
 		signals.DipBounce{},
 		signals.RelativeStrength{},
+		signals.FirstHourReversal{},
 	}
 }
 
@@ -299,6 +319,107 @@ func loadBars(uni *signals.Universe, days int, noCache bool) btData {
 		}
 	}
 	return data
+}
+
+// analyzeOpen30 tests the operator's hypothesis "a stock that rises in the first 30
+// minutes falls for the rest of the day, and vice versa": for every (symbol, day) it
+// computes r1 = return from the 09:30 open to 10:00 ET and r2 = return from 10:00 to the
+// 15:55 close, then reports the correlation and what actually happened after the biggest
+// early risers/fallers. Pure measurement — no trading logic.
+func analyzeOpen30(uni *signals.Universe, minute map[string][]signals.Bar) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	var all []open30Obs
+	for _, sym := range uni.Symbols() {
+		byDay := map[string][]signals.Bar{}
+		for _, b := range minute[sym] {
+			n := time.Unix(b.Time, 0).In(loc)
+			if n.Weekday() == time.Saturday || n.Weekday() == time.Sunday {
+				continue
+			}
+			o := time.Date(n.Year(), n.Month(), n.Day(), 9, 30, 0, 0, loc).Unix()
+			if b.Time < o || b.Time >= o+390*60 {
+				continue
+			}
+			byDay[n.Format("2006-01-02")] = append(byDay[n.Format("2006-01-02")], b)
+		}
+		for _, bars := range byDay {
+			sort.Slice(bars, func(i, j int) bool { return bars[i].Time < bars[j].Time })
+			open := bars[0].Open
+			day0 := time.Unix(bars[0].Time, 0).In(loc)
+			t10 := time.Date(day0.Year(), day0.Month(), day0.Day(), 10, 0, 0, 0, loc).Unix()
+			t1555 := time.Date(day0.Year(), day0.Month(), day0.Day(), 15, 55, 0, 0, loc).Unix()
+			var px10, pxEnd float64
+			for _, b := range bars {
+				if b.Time <= t10 {
+					px10 = b.Close
+				}
+				if b.Time <= t1555 {
+					pxEnd = b.Close
+				}
+			}
+			if open <= 0 || px10 <= 0 || pxEnd <= 0 || len(bars) < 100 {
+				continue
+			}
+			all = append(all, open30Obs{r1: (px10 - open) / open * 100, r2: (pxEnd - px10) / px10 * 100})
+		}
+	}
+	if len(all) < 100 {
+		fmt.Printf("not enough (symbol, day) observations: %d\n", len(all))
+		return
+	}
+	// Pearson correlation r1 vs r2.
+	var m1, m2 float64
+	for _, o := range all {
+		m1 += o.r1
+		m2 += o.r2
+	}
+	m1 /= float64(len(all))
+	m2 /= float64(len(all))
+	var cov, v1, v2 float64
+	for _, o := range all {
+		cov += (o.r1 - m1) * (o.r2 - m2)
+		v1 += (o.r1 - m1) * (o.r1 - m1)
+		v2 += (o.r2 - m2) * (o.r2 - m2)
+	}
+	corr := cov / (math.Sqrt(v1) * math.Sqrt(v2))
+
+	sort.Slice(all, func(i, j int) bool { return all[i].r1 < all[j].r1 })
+	dec := len(all) / 10
+	bucket := func(list []open30Obs) (meanR2 float64, fellPct float64) {
+		fell := 0
+		for _, o := range list {
+			meanR2 += o.r2
+			if o.r2 < 0 {
+				fell++
+			}
+		}
+		return meanR2 / float64(len(list)), float64(fell) / float64(len(list)) * 100
+	}
+	loMean, loFell := bucket(all[:dec])          // biggest early FALLERS
+	hiMean, hiFell := bucket(all[len(all)-dec:]) // biggest early RISERS
+	midMean, midFell := bucket(all[4*dec : 6*dec])
+
+	fmt.Printf("\n════ Does the first 30 minutes predict the rest of the day? ════\n")
+	fmt.Printf("observations: %d (symbol, day) pairs · correlation(first30, rest-of-day): %+.3f\n\n", len(all), corr)
+	fmt.Printf("%-34s %10s %14s\n", "group (by first-30-min move)", "avg rest", "% that fell")
+	fmt.Printf("%-34s %+9.2f%% %13.0f%%\n", fmt.Sprintf("top decile risers   (avg %+.1f%%)", avgR1(all[len(all)-dec:])), hiMean, hiFell)
+	fmt.Printf("%-34s %+9.2f%% %13.0f%%\n", "middle (flat opens)", midMean, midFell)
+	fmt.Printf("%-34s %+9.2f%% %13.0f%%\n", fmt.Sprintf("bottom decile fallers (avg %+.1f%%)", avgR1(all[:dec])), loMean, loFell)
+	fmt.Printf("\nReading: a correlation near 0 = no reliable relationship; 'always falls' would\nshow up as a strongly negative correlation and a fell%% far above 50%%.\n")
+}
+
+// open30Obs is one (symbol, day) observation for the first-30-minutes analysis.
+type open30Obs struct{ r1, r2 float64 }
+
+func avgR1(list []open30Obs) float64 {
+	var s float64
+	for _, o := range list {
+		s += o.r1
+	}
+	return s / float64(len(list))
 }
 
 // loadPredictions reads a predictions JSONL (from ml/train_gate.py) into the gate map.

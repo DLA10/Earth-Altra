@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -34,12 +35,29 @@ type Engine struct {
 	dayCnt  map[string]int   // "strategy|symbol|day" -> signals published today
 	pending []*pendingOutcome
 	seq     int64
+
+	// Time-of-day conditioning (the promoted Tier-1 mechanism): per (strategy,
+	// half-hour-of-session) running outcome stats, persisted across restarts and
+	// warm-startable from a backtest-generated seed file. Signals fired in a bucket
+	// with ≥ condMinSamples outcomes and negative mean R are flagged tod_blocked in the
+	// journal, and EntryAllowed reports false for them (the future execution gate).
+	tod     map[string]*todStat // "strategy|bucket"
+	todPath string
 }
+
+// todStat is one persisted conditioning bucket.
+type todStat struct {
+	N   int     `json:"n"`
+	Sum float64 `json:"sum"`
+}
+
+func (s *todStat) blocks() bool { return s.N >= condMinSamples && s.Sum/float64(s.N) < 0 }
 
 // pendingOutcome tracks one published signal until its counterfactual bracket resolves.
 type pendingOutcome struct {
-	sig  Signal
-	done bool
+	sig       Signal
+	todBucket int
+	done      bool
 }
 
 // signalCooldown / maxPerDay bound repeat-fires per (strategy, symbol).
@@ -54,15 +72,64 @@ func NewEngine(uni *Universe, dataDir string) *Engine {
 	if err != nil {
 		loc = time.UTC
 	}
-	return &Engine{
-		store:  NewStore(),
-		uni:    uni,
-		strats: DefaultStrategies(),
-		logDir: filepath.Join(dataDir, "signals"),
-		et:     loc,
-		cool:   map[string]int64{},
-		dayCnt: map[string]int{},
+	e := &Engine{
+		store:   NewStore(),
+		uni:     uni,
+		strats:  DefaultStrategies(),
+		logDir:  filepath.Join(dataDir, "signals"),
+		et:      loc,
+		cool:    map[string]int64{},
+		dayCnt:  map[string]int{},
+		tod:     map[string]*todStat{},
+		todPath: filepath.Join(dataDir, "signals", "tod_stats.json"),
 	}
+	e.loadTOD()
+	return e
+}
+
+// loadTOD restores the persisted conditioning stats (seeded by backtests, grown live).
+func (e *Engine) loadTOD() {
+	b, err := os.ReadFile(e.todPath)
+	if err != nil {
+		return
+	}
+	m := map[string]*todStat{}
+	if json.Unmarshal(b, &m) == nil {
+		e.tod = m
+		log.Printf("[signals] time-of-day stats loaded: %d buckets", len(m))
+	}
+}
+
+// saveTOD persists the conditioning stats (best-effort; caller holds e.mu).
+func (e *Engine) saveTOD() {
+	b, err := json.MarshalIndent(e.tod, "", " ")
+	if err != nil {
+		return
+	}
+	if os.MkdirAll(e.logDir, 0o755) == nil {
+		_ = os.WriteFile(e.todPath, b, 0o644)
+	}
+}
+
+// todBlocked reports whether a (strategy, bucket) pair has proven negative expectancy.
+func (e *Engine) todBlocked(strategy string, bucket int) bool {
+	if st := e.tod[strategy+"|"+strconv.Itoa(bucket)]; st != nil {
+		return st.blocks()
+	}
+	return false
+}
+
+// EntryAllowed is the execution-time gate (used once paper execution is enabled; today
+// it only annotates the shadow journal): true unless the signal's time-of-day bucket has
+// proven negative expectancy.
+func (e *Engine) EntryAllowed(sig Signal) bool {
+	open := e.store.SessionOpen()
+	if open == 0 {
+		return true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.todBlocked(sig.Strategy, minuteOf(sig.Time, open)/30)
 }
 
 // Universe exposes the loaded universe (for stream subscription wiring).
@@ -129,11 +196,15 @@ func (e *Engine) detect(sym string, bars []Bar) {
 	}
 }
 
-// publish applies cooldowns, stamps identity, logs, registers the counterfactual, and
-// hands the signal to the execution hook (if any).
+// publish applies cooldowns, stamps identity, logs (with the time-of-day verdict),
+// registers the counterfactual, and hands the signal to the execution hook (if any).
 func (e *Engine) publish(sig Signal) {
 	day := time.Unix(sig.Time, 0).In(e.et).Format("2006-01-02")
 	key := sig.Strategy + "|" + sig.Symbol
+	bucket := 0
+	if open := e.store.SessionOpen(); open > 0 {
+		bucket = minuteOf(sig.Time, open) / 30
+	}
 
 	e.mu.Lock()
 	if last, ok := e.cool[key]; ok && sig.Time-last < int64(signalCooldown.Seconds()) {
@@ -149,12 +220,19 @@ func (e *Engine) publish(sig Signal) {
 	e.seq++
 	sig.ID = fmt.Sprintf("%s-%s-%d-%d", sig.Strategy, sig.Symbol, sig.Time, e.seq)
 	sig.Sector = e.uni.Sector(sig.Symbol)
-	e.pending = append(e.pending, &pendingOutcome{sig: sig})
+	todBlocked := e.todBlocked(sig.Strategy, bucket)
+	e.pending = append(e.pending, &pendingOutcome{sig: sig, todBucket: bucket})
 	e.mu.Unlock()
 
-	e.writeJSONL(day, map[string]interface{}{"type": "signal", "signal": sig})
-	log.Printf("[signals] %s %s @ $%.2f (stop %.2f / target %.2f, rvol %.1f, q %.1f)",
-		sig.Strategy, sig.Symbol, sig.Price, sig.Suggested.Stop, sig.Suggested.Target, sig.Features["rvol"], sig.Quality)
+	e.writeJSONL(day, map[string]interface{}{
+		"type": "signal", "signal": sig, "tod_bucket": bucket, "tod_blocked": todBlocked,
+	})
+	verdict := ""
+	if todBlocked {
+		verdict = " [TOD-blocked]"
+	}
+	log.Printf("[signals] %s %s @ $%.2f (stop %.2f / target %.2f, rvol %.1f, q %.1f)%s",
+		sig.Strategy, sig.Symbol, sig.Price, sig.Suggested.Stop, sig.Suggested.Target, sig.Features["rvol"], sig.Quality, verdict)
 	if e.OnSignal != nil {
 		e.OnSignal(sig)
 	}
@@ -197,6 +275,14 @@ func (e *Engine) resolveOutcomes(sym string, b Bar) {
 		if risk > 0 {
 			r = (exit - p.sig.Suggested.Entry) / risk
 		}
+		// Grow the persisted time-of-day stats with this resolved outcome.
+		tk := p.sig.Strategy + "|" + strconv.Itoa(p.todBucket)
+		if e.tod[tk] == nil {
+			e.tod[tk] = &todStat{}
+		}
+		e.tod[tk].N++
+		e.tod[tk].Sum += r
+		e.saveTOD()
 		due = append(due, map[string]interface{}{
 			"type":          "outcome",
 			"id":            p.sig.ID,

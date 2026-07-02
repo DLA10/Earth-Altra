@@ -1,6 +1,8 @@
 package signals
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -110,6 +112,65 @@ func TestVWAPReclaimFires(t *testing.T) {
 	}
 	if sig.Suggested.Stop >= sig.Suggested.Entry {
 		t.Fatalf("stop must sit below entry: %+v", sig.Suggested)
+	}
+}
+
+func TestFirstHourReversalFires(t *testing.T) {
+	open := sessionOpenUnix(t)
+	bars := []Bar{}
+	// Morning dump: $100 open bleeding to $97.5 by minute 29 (1.25 × ATR(2)).
+	for i := 0; i < 30; i++ {
+		c := 100.0 - 2.5*float64(i)/29.0
+		bars = append(bars, bar(open, i, c+0.05, c+0.1, c-0.05, c, 30_000))
+	}
+	// The low stops going down: half an hour of basing above the low.
+	for i := 30; i < 65; i++ {
+		c := 97.6 + 0.2*float64(i%3)/2
+		bars = append(bars, bar(open, i, c-0.02, c+0.06, c-0.04, c, 20_000))
+	}
+	// 10:35 ET: a green bar lifting clearly off the low → reversal entry.
+	bars = append(bars, bar(open, 65, 97.95, 98.30, 97.90, 98.25, 28_000))
+
+	sig := (FirstHourReversal{}).Detect("AAA", bars, baseCtx(open))
+	if sig == nil {
+		t.Fatal("expected a first-hour reversal signal")
+	}
+	if sig.Suggested.Stop >= sig.Suggested.Entry || sig.Suggested.Target <= sig.Suggested.Entry {
+		t.Fatalf("bad bracket: %+v", sig.Suggested)
+	}
+	// Same tape 30 minutes earlier (minute 35) must NOT fire — outside the window.
+	if (FirstHourReversal{}).Detect("AAA", bars[:36], baseCtx(open)) != nil {
+		t.Fatal("reversal must not fire before 10:30 ET")
+	}
+}
+
+func TestEngineTODSeedGatesEntries(t *testing.T) {
+	dir := t.TempDir()
+	// Seed: dip_bounce's 11:00 bucket (index 3) proven negative; bucket 0 healthy.
+	if err := os.MkdirAll(filepath.Join(dir, "signals"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"dip_bounce|3":{"n":100,"sum":-8.5},"dip_bounce|0":{"n":100,"sum":12.0}}`
+	if err := os.WriteFile(filepath.Join(dir, "signals", "tod_stats.json"), []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uni := &Universe{ContextSymbols: []string{"QQQ"}, sectorOf: map[string]string{"AAA": "test"}}
+	e := NewEngine(uni, dir)
+
+	open := sessionOpenUnix(t)
+	// Prime the store's session clock with one bar.
+	e.OnBar("AAA", time.Unix(open, 0), 100, 100.1, 99.9, 100, 1000)
+
+	blocked := Signal{Strategy: "dip_bounce", Time: open + 3*30*60 + 60} // 11:01 ET → bucket 3
+	healthy := Signal{Strategy: "dip_bounce", Time: open + 60}           // 09:31 ET → bucket 0
+	if e.EntryAllowed(blocked) {
+		t.Fatal("seeded-negative bucket must block entries")
+	}
+	if !e.EntryAllowed(healthy) {
+		t.Fatal("healthy bucket must allow entries")
+	}
+	if e.EntryAllowed(Signal{Strategy: "vwap_reclaim", Time: blocked.Time}) != true {
+		t.Fatal("unseeded strategy/bucket must pass through")
 	}
 }
 

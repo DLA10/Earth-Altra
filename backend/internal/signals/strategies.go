@@ -2,10 +2,10 @@ package signals
 
 import "math"
 
-// DefaultStrategies returns the v1 strategy set (all long-only, intraday). Order matters
+// DefaultStrategies returns the strategy set (all long-only, intraday). Order matters
 // only for log readability. Each detector is deliberately simple and well-understood —
 // the edge comes from selectivity + risk control + the ML gate later, not cleverness.
-// ALL five run in shadow (their signals + outcomes are the ML dataset); only
+// ALL of them run in shadow (their signals + outcomes are the ML dataset); only
 // PromotedStrategies may ever place paper orders.
 func DefaultStrategies() []Strategy {
 	return []Strategy{
@@ -14,6 +14,7 @@ func DefaultStrategies() []Strategy {
 		MomentumContinuation{},
 		DipBounce{},
 		RelativeStrength{},
+		FirstHourReversal{},
 	}
 }
 
@@ -347,7 +348,71 @@ func (DipBounce) Detect(sym string, bars []Bar, ctx Context) *Signal {
 	})
 }
 
-// ---- 5. Relative strength -----------------------------------------------------------
+// ---- 5. First-hour reversal -----------------------------------------------------------
+
+// FirstHourReversal systematizes the operator's observation (RESEARCH_BACKLOG #1):
+// stocks dumped hard in the first hour tend to bounce. It buys a deep morning loser
+// (≥ 1 daily ATR below its open) once the selling has demonstrably stopped — the low is
+// at least 10 minutes old and price has lifted off it on a green bar. Fires only
+// 10:30–11:30 ET, the classic reversal window. All parameters were fixed before testing.
+type FirstHourReversal struct{}
+
+func (FirstHourReversal) Name() string { return "fh_reversal" }
+
+func (FirstHourReversal) Detect(sym string, bars []Bar, ctx Context) *Signal {
+	n := len(bars)
+	if n < 45 || ctx.ATR <= 0 {
+		return nil
+	}
+	last := bars[n-1]
+	minute := minuteOf(last.Time, ctx.SessionOpen)
+	if minute < 60 || minute > 120 { // 10:30–11:30 ET only
+		return nil
+	}
+	open := bars[0].Open
+	if open <= 0 {
+		return nil
+	}
+	// The morning dump: session low ≥ 1 ATR below the open, and price still below open
+	// (we're buying a beaten-down name, not one that already fully recovered).
+	sessionLow, lowIdx := math.Inf(1), 0
+	for i, b := range bars {
+		if b.Low < sessionLow {
+			sessionLow = b.Low
+			lowIdx = i
+		}
+	}
+	drop := open - sessionLow
+	if drop < 1.0*ctx.ATR || last.Close >= open {
+		return nil
+	}
+	// Stabilization: the low is at least 10 minutes old, price has lifted ≥ 0.15 ATR off
+	// it, the current bar is green, and we're making net progress over the last 5 bars.
+	if n-1-lowIdx < 10 {
+		return nil
+	}
+	if last.Close < sessionLow+0.15*ctx.ATR || last.Close <= last.Open || last.Close <= bars[n-6].Close {
+		return nil
+	}
+	if ctx.RVOL < 1.2 {
+		return nil
+	}
+	entry := last.Close
+	stop := sessionLow - 0.10*ctx.ATR
+	if !riskOK(entry, stop, ctx.ATR) {
+		return nil
+	}
+	target := entry + 1.2*(entry-stop)
+	return newSignal("fh_reversal", sym, last, entry, stop, target, ctx, map[string]float64{
+		"drop_atr":       drop / ctx.ATR,
+		"pct_from_open":  (last.Close - open) / open * 100,
+		"bounce_atr":     (last.Close - sessionLow) / ctx.ATR,
+		"min_since_low":  float64(n - 1 - lowIdx),
+		"session_low":    sessionLow,
+	})
+}
+
+// ---- 6. Relative strength -----------------------------------------------------------
 
 // RelativeStrength buys a stock making new session highs above VWAP while the broad
 // market (QQQ) is flat or red — cross-sectional leadership that tends to accelerate when
