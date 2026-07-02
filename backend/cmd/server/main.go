@@ -30,6 +30,7 @@ import (
 	"live-optimus/backend/internal/gemini"
 	"live-optimus/backend/internal/hub"
 	"live-optimus/backend/internal/quant"
+	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
 	"live-optimus/backend/internal/signals"
 	"live-optimus/backend/internal/watchlist"
@@ -304,6 +305,28 @@ func main() {
 			log.Printf("quant: SHADOW mode (set QUANT_LIVE=true + paper keys to place orders) | universe=%d", len(qUniverse.Symbols()))
 		} else {
 			log.Printf("quant: idle (set ANTHROPIC_API_KEY); dip hook installed")
+		}
+
+		// ---- Signal-engine paper execution (the validated Tier-1 champion config) ----
+		// Bridge: signal → learned time-of-day gate → LLM entry judge (red-flag veto +
+		// conviction sizing) → shared allocator → Manager (entry, trailing-stop floor,
+		// Agent 3 exits, EOD flatten) → Claude PAPER account. Shares the allocator with
+		// the dip pipeline so the two can never oversubscribe the $8k budget. The
+		// dipwatch Telegram flow is untouched.
+		if sigEngine != nil && qBroker.Enabled() {
+			judge := quant.NewSignalJudge(qAnth, cfg.QuantJudgeModel)
+			limits := risk.Defaults()
+			limits.DailyLossCapUSD = cfg.QuantDailyLossCap
+			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive)
+			sigEngine.SetOnSignal(trader.OnSignal)
+			if cfg.QuantSignalsLive {
+				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate active",
+					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap)
+			} else {
+				log.Printf("signal-trader: disabled (QUANT_SIGNALS_LIVE=false) — shadow journaling only")
+			}
+		} else if sigEngine != nil {
+			log.Printf("signal-trader: no paper broker keys — shadow journaling only")
 		}
 	}
 

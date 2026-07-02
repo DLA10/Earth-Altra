@@ -32,6 +32,11 @@ type Manager struct {
 	trailPct     float64
 	overnightCap float64 // max position VALUE allowed past the close (0 = flatten all)
 
+	// OnClosed, when set, receives an APPROXIMATE realized P&L for every closed position
+	// (marked to the last engine price at close detection). Feeds the daily loss-cap
+	// tracker; the authoritative P&L remains the broker reconstruction.
+	OnClosed func(sym string, approxPNL float64)
+
 	mu        sync.Mutex
 	open      map[string]*managedPos
 	keeperDay string // ET day the overnight keeper was chosen for
@@ -57,10 +62,15 @@ func (m *Manager) OpenSymbols() []string {
 	return out
 }
 
-// Open executes an approved buy: market entry → confirm fill → place the trailing-stop floor →
-// register → run the Agent 3 loop. Releases the reserved capital on any pre-registration failure.
+// Open executes an approved dip buy (the dipwatch pipeline's entry point).
 func (m *Manager) Open(ctx context.Context, de DipEvent, conf, dollars float64) {
-	sym := de.Symbol
+	m.OpenPosition(ctx, de.Symbol, conf, dollars)
+}
+
+// OpenPosition executes an approved buy for any pipeline (dip or signal engine): market
+// entry → confirm fill → place the trailing-stop floor → register → run the Agent 3 loop.
+// Releases the reserved capital on any pre-registration failure.
+func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars float64) {
 	registered := false
 	defer func() {
 		if !registered {
@@ -147,7 +157,7 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 
 		// Closed on the exchange (the stop filled, or a prior exit completed)?
 		if qty, err := m.broker.PositionQty(sym); err == nil && qty <= 0 {
-			m.close(sym, "closed on exchange (stop/exit filled)")
+			m.close(pos, "closed on exchange (stop/exit filled)")
 			return
 		}
 
@@ -167,7 +177,7 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 				log.Printf("[quant] %s still not flat after the close — retrying EOD exit", sym)
 			}
 			if m.forceExit(pos, "EOD_Force") {
-				m.close(sym, "EOD flatten")
+				m.close(pos, "EOD flatten")
 				return
 			}
 			continue
@@ -240,13 +250,13 @@ func (m *Manager) execute(pos *managedPos, d ExitDecision) (closed bool) {
 		return false
 	case ExitTakeProfit:
 		if m.forceExit(pos, "Take_Profit") {
-			m.close(sym, "take-profit exit")
+			m.close(pos, "take-profit exit")
 			return true
 		}
 		return false
 	case ExitNow:
 		if m.forceExit(pos, "AI_Exit") {
-			m.close(sym, "AI exit")
+			m.close(pos, "AI exit")
 			return true
 		}
 		return false
@@ -348,13 +358,21 @@ func (m *Manager) mayHoldOvernight(sym string) bool {
 	return m.keeperSym == sym
 }
 
-func (m *Manager) close(sym, note string) {
+func (m *Manager) close(pos *managedPos, note string) {
+	sym := pos.symbol
 	m.mu.Lock()
 	delete(m.open, sym)
 	m.mu.Unlock()
 	m.eng.alloc.Release(sym)
 	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "outcome", Symbol: sym, Note: note})
 	log.Printf("[quant] CLOSED %s — %s; capital released", sym, note)
+	if m.OnClosed != nil {
+		pnl := 0.0
+		if px := m.eng.LastClose(sym); px > 0 {
+			pnl = (px - pos.entryPrice) * pos.qty
+		}
+		m.OnClosed(sym, pnl)
+	}
 }
 
 func (m *Manager) log(agent, event, sym, note string) {

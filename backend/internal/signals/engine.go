@@ -27,7 +27,8 @@ type Engine struct {
 	logDir string
 	et     *time.Location
 
-	// OnSignal, when set, receives every published signal (for paper execution later).
+	// OnSignal, when set, receives every published signal (the paper-execution hook).
+	// Set via SetOnSignal after construction — reads are synchronized with publishes.
 	OnSignal func(Signal)
 
 	mu      sync.Mutex
@@ -135,6 +136,13 @@ func (e *Engine) EntryAllowed(sig Signal) bool {
 // Universe exposes the loaded universe (for stream subscription wiring).
 func (e *Engine) Universe() *Universe { return e.uni }
 
+// SetOnSignal installs the execution hook (safe to call after the stream started).
+func (e *Engine) SetOnSignal(fn func(Signal)) {
+	e.mu.Lock()
+	e.OnSignal = fn
+	e.mu.Unlock()
+}
+
 // SeedDaily installs a symbol's daily ATR / avg-volume context (startup REST seed).
 func (e *Engine) SeedDaily(sym string, atr, avgVol float64) { e.store.SetDaily(sym, atr, avgVol) }
 
@@ -222,6 +230,7 @@ func (e *Engine) publish(sig Signal) {
 	sig.Sector = e.uni.Sector(sig.Symbol)
 	todBlocked := e.todBlocked(sig.Strategy, bucket)
 	e.pending = append(e.pending, &pendingOutcome{sig: sig, todBucket: bucket})
+	onSignal := e.OnSignal
 	e.mu.Unlock()
 
 	e.writeJSONL(day, map[string]interface{}{
@@ -233,8 +242,8 @@ func (e *Engine) publish(sig Signal) {
 	}
 	log.Printf("[signals] %s %s @ $%.2f (stop %.2f / target %.2f, rvol %.1f, q %.1f)%s",
 		sig.Strategy, sig.Symbol, sig.Price, sig.Suggested.Stop, sig.Suggested.Target, sig.Features["rvol"], sig.Quality, verdict)
-	if e.OnSignal != nil {
-		e.OnSignal(sig)
+	if onSignal != nil {
+		onSignal(sig)
 	}
 }
 

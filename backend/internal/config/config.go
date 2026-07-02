@@ -79,6 +79,15 @@ type Config struct {
 
 	// Quant signal engine: the curated ~100-symbol universe file (QUANT_UNIVERSE.json).
 	QuantUniverseCandidates []string
+	// QuantSignalsLive routes signal-engine entries (all strategies + the learned
+	// time-of-day gate — the validated Tier-1 config) to the PAPER broker via the LLM
+	// judge + allocator + manager. false = shadow journaling only.
+	QuantSignalsLive bool
+	// QuantJudgeModel is the signal entry judge's model.
+	QuantJudgeModel string
+	// QuantDailyLossCap halts new signal entries once the day's approximate realized
+	// P&L reaches -cap (USD).
+	QuantDailyLossCap float64
 }
 
 const (
@@ -123,6 +132,9 @@ func Load() (*Config, error) {
 		QuantTrailPct:       envFloat("QUANT_TRAIL_PCT", 1.5),
 		QuantLive:           envBool("QUANT_LIVE", true),
 		QuantOvernightCap:   envFloat("QUANT_OVERNIGHT_CAP", 0),
+		QuantSignalsLive:    envBool("QUANT_SIGNALS_LIVE", true),
+		QuantJudgeModel:     envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
+		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
 	}
 
 	c.QuantUniverseCandidates = []string{

@@ -207,13 +207,17 @@ START-Live-Optimus.bat      one-click Windows launcher
   every decision logged as JSONL to `data/decisions/`. Model proposes, Go disposes.
   See `QUANT_VISION.md` for where this subsystem is headed.
 
-- **`signals`** — the multi-strategy intraday signal engine (QUANT_VISION Phase 1): five
+- **`signals`** — the multi-strategy intraday signal engine (QUANT_VISION Phase 1): six
   deterministic detectors (ORB breakout, VWAP reclaim, momentum continuation, dip bounce,
-  relative strength) over the curated QUANT_UNIVERSE.json (~100 names), fed as an ADDITIVE
-  bar consumer off the single SIP stream. SHADOW-first: every signal + its counterfactual
-  bracket outcome is logged to `data/signals/*.jsonl` (the future ML training set); no
-  orders are placed until backtesting validates and execution is explicitly enabled. The
-  same detectors power `cmd/backtest`.
+  relative strength, first-hour reversal) over the curated QUANT_UNIVERSE.json (~100
+  names), fed as an ADDITIVE bar consumer off the single SIP stream. Every signal + its
+  counterfactual bracket outcome is journaled to `data/signals/*.jsonl` (the ML training
+  set), annotated with the learned **time-of-day gate** verdict (`tod_stats.json`,
+  persisted + seeded from backtests; `EntryAllowed`). The same detectors power
+  `cmd/backtest`. Execution: `quant.SignalTrader` bridges published signals to the PAPER
+  broker (validated Tier-1 config) — TOD gate → LLM entry judge (`signaljudge.go`,
+  red-flag veto + conviction sizing) → shared allocator → Manager (trailing-stop floor,
+  Agent 3 exits, EOD flatten) — gated by `QUANT_SIGNALS_LIVE` and the daily loss cap.
 
 - **`risk`** — deterministic guardrails shared by the backtester and (future) live-paper
   signal execution: daily loss cap, per-trade risk / notional sizing, concurrency cap,
@@ -372,6 +376,9 @@ chart's single-symbol subscription.
 | `QUANT_LIVE` | `true` | `false` = shadow mode (log only, no paper orders) |
 | `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position up to this value overnight (0 = flatten all) |
 | `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe file override |
+| `QUANT_SIGNALS_LIVE` | `true` | Route signal-engine entries to the paper broker (false = shadow only) |
+| `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge model |
+| `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries once day P&L ≈ −cap |
 | `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | `localhost:11434` / `gemma2:2b` | Agent 4 sentiment (local) |
 
 Backfill always loads the full current session day per symbol (no bar-count knob).
