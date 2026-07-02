@@ -284,6 +284,14 @@ func main() {
 		qEngine.SetExecution(qBroker, qMgr)
 		qEngine.SetContext(ctx)
 
+		// Restart resilience: re-adopt any position that survived a process restart —
+		// re-attach (or freshly place) its protective stop, re-fund the allocator so the
+		// shared budget can't be oversubscribed, and resume its Agent-3 manage loop.
+		// Runs BEFORE any entry source (dip hook / signal trader) can act.
+		if n := qMgr.Rehydrate(ctx); n > 0 {
+			log.Printf("quant: rehydrated %d open position(s) from the paper account", n)
+		}
+
 		// Daily post-market review (Opus): reads the decision log + reconstructed trades, writes a
 		// structured report to backend/data/reviews/ for the next pre-market session to learn from.
 		qReviewer := quant.NewReviewer(qAnth, cfg.QuantReviewModel, qLog,

@@ -201,11 +201,48 @@ type paperOrd struct {
 	ClientOrderID  string     `json:"client_order_id"`
 	Symbol         string     `json:"symbol"`
 	Side           string     `json:"side"`
+	Type           string     `json:"type"`
+	Qty            string     `json:"qty"`
+	StopPrice      string     `json:"stop_price"`
 	FilledQty      string     `json:"filled_qty"`
 	FilledAvgPrice string     `json:"filled_avg_price"`
 	Status         string     `json:"status"`
 	FilledAt       *time.Time `json:"filled_at"`
 	SubmittedAt    *time.Time `json:"submitted_at"`
+}
+
+// BrokerPosition is one open position on the paper account.
+type BrokerPosition struct {
+	Symbol   string
+	Qty      float64
+	AvgEntry float64
+}
+
+// Positions lists the paper account's open positions (the account is dedicated to the
+// quant desk, so every position here is ours).
+func (b *Broker) Positions() ([]BrokerPosition, error) {
+	rb, code, err := b.do(http.MethodGet, "/positions", nil)
+	if err != nil {
+		return nil, err
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("positions fetch (%d): %s", code, strings.TrimSpace(string(rb)))
+	}
+	var raw []struct {
+		Symbol        string `json:"symbol"`
+		Qty           string `json:"qty"`
+		AvgEntryPrice string `json:"avg_entry_price"`
+	}
+	if err := json.Unmarshal(rb, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]BrokerPosition, 0, len(raw))
+	for _, p := range raw {
+		q, _ := strconv.ParseFloat(p.Qty, 64)
+		ae, _ := strconv.ParseFloat(p.AvgEntryPrice, 64)
+		out = append(out, BrokerPosition{Symbol: p.Symbol, Qty: q, AvgEntry: ae})
+	}
+	return out, nil
 }
 
 func ordTime(o paperOrd) time.Time {

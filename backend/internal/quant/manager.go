@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -131,6 +133,112 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 		Note: fmt.Sprintf("entry %.0f @ $%.2f; trailing stop %.1f%% placed", fq, ap, m.trailPct)})
 	log.Printf("[quant] ENTER %s %.0f @ $%.2f (conf %.2f); trailing stop %.1f%%", sym, fq, ap, conf, m.trailPct)
 	m.manage(ctx, pos)
+}
+
+// openOrderStatuses are Alpaca statuses under which a protective order is still working.
+var openOrderStatuses = map[string]bool{
+	"new": true, "accepted": true, "held": true, "partially_filled": true,
+	"pending_new": true, "accepted_for_bidding": true, "calculated": true,
+}
+
+// Rehydrate re-adopts positions that survived a process restart. The exchange is the
+// source of truth: every open position on the (dedicated) paper account is re-registered,
+// its protective stop is re-attached (or freshly placed — a position must never sit
+// unprotected), the allocator is re-funded with its cost so the shared budget can't be
+// oversubscribed, and the Agent-3 manage loop resumes. Call synchronously at startup
+// BEFORE any entry source (signal trader / dip hook) is wired. Returns adopted count.
+func (m *Manager) Rehydrate(ctx context.Context) int {
+	if m.broker == nil || !m.broker.Enabled() {
+		return 0
+	}
+	positions, err := m.broker.Positions()
+	if err != nil {
+		log.Printf("[quant] rehydrate: positions fetch failed: %v", err)
+		return 0
+	}
+	if len(positions) == 0 {
+		return 0
+	}
+	orders, err := m.broker.allOrders()
+	if err != nil {
+		log.Printf("[quant] rehydrate: order history fetch failed: %v", err)
+		orders = nil // still adopt with fresh stops; entry times fall back to now
+	}
+
+	adopted := 0
+	for _, p := range positions {
+		if p.Qty < 1 || p.AvgEntry <= 0 {
+			continue // long-only whole-share desk; anything else isn't ours to manage
+		}
+		m.mu.Lock()
+		_, exists := m.open[p.Symbol]
+		m.mu.Unlock()
+		if exists {
+			continue
+		}
+
+		// Recover entry time (newest filled entry buy) and the newest working stop.
+		entryTime := time.Now()
+		var stop *paperOrd
+		for i := range orders {
+			o := &orders[i]
+			if o.Symbol != p.Symbol || !strings.HasPrefix(o.ClientOrderID, QuantStrategy+"__") {
+				continue
+			}
+			if o.Side == "buy" && o.Status == "filled" {
+				entryTime = ordTime(*o)
+			}
+			if o.Side == "sell" && openOrderStatuses[o.Status] && (o.Type == "trailing_stop" || o.Type == "stop") {
+				if stop == nil || ordTime(*o).After(ordTime(*stop)) {
+					stop = o
+				}
+			}
+		}
+
+		stopID := ""
+		stopPrice := round2(p.AvgEntry * (1 - m.trailPct/100)) // conservative floor guess
+		if stop != nil {
+			sq, _ := strconv.ParseFloat(stop.Qty, 64)
+			if sq == p.Qty {
+				stopID = stop.ID
+				if sp, _ := strconv.ParseFloat(stop.StopPrice, 64); sp > 0 {
+					stopPrice = sp
+				}
+			} else {
+				// Wrong-size stop (process died mid-replace): replace it cleanly.
+				_ = m.broker.Cancel(stop.ID)
+			}
+		}
+		if stopID == "" {
+			coid := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, p.Symbol, time.Now().UnixNano())
+			id, serr := m.broker.TrailingStopSell(p.Symbol, p.Qty, m.trailPct, coid)
+			if serr != nil {
+				// Can't protect it → don't hold it (same invariant as at entry).
+				log.Printf("[quant] rehydrate: %s stop placement failed (%v) — exiting to stay protected", p.Symbol, serr)
+				ec := fmt.Sprintf("%s__%s__exit__No_Stop__%d", QuantStrategy, p.Symbol, time.Now().UnixNano())
+				if _, e := m.broker.MarketSell(p.Symbol, p.Qty, ec); e != nil {
+					log.Printf("[quant] CRITICAL: rehydrated %s held with NO stop and exit sell failed: %v", p.Symbol, e)
+				}
+				continue
+			}
+			stopID = id
+		}
+
+		pos := &managedPos{symbol: p.Symbol, qty: p.Qty, entryPrice: p.AvgEntry, entryTime: entryTime,
+			stopOrderID: stopID, stopPrice: stopPrice, conf: 0.6}
+		m.mu.Lock()
+		m.open[p.Symbol] = pos
+		m.mu.Unlock()
+		if !m.eng.alloc.Fund(p.Symbol, p.Qty*p.AvgEntry) {
+			log.Printf("[quant] rehydrate: WARNING — allocator would not fund %s ($%.0f); budget accounting may under-count", p.Symbol, p.Qty*p.AvgEntry)
+		}
+		m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: p.Symbol,
+			Note: fmt.Sprintf("rehydrated after restart: %.0f @ $%.2f, stop re-attached", p.Qty, p.AvgEntry)})
+		log.Printf("[quant] REHYDRATED %s %.0f @ $%.2f (stop %s) — manage loop resumed", p.Symbol, p.Qty, p.AvgEntry, stopID)
+		go m.manage(ctx, pos)
+		adopted++
+	}
+	return adopted
 }
 
 func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
