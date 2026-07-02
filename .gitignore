@@ -1,0 +1,37 @@
+# Secrets
+.env
+backend/.env
+*.local
+
+# Runtime state + account data (real fills/deposits land here — never commit)
+backend/data/
+
+# Backups
+*.bak
+
+# Go
+backend/server
+backend/server.exe
+backend/*.exe
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Large SIP data exports
+Data-Sip/candles/
+Data-Sip/logs/
+Data-Sip/manifest/
+
+# Python ML plane
+ml/.venv/
+
+# Build artifacts
+*.tsbuildinfo
+ml/__pycache__/
