@@ -1,5 +1,24 @@
 # RESEARCH_BACKLOG.md — the idea queue
 
+## Status ledger (2026-07-03) — settled questions; do not re-litigate
+
+| # | Idea | Verdict |
+|---|---|---|
+| 1 | First-hour reversal | ❌ **KILLED** (−$515/6mo standalone; open30 analysis: corr +0.017 — no reversal effect in this universe). Detector kept shadow-only; TOD gate benches it |
+| 2 | Cross-sectional ranking gate | ➖ **BENCHED** (only ML variant positive in dollars: +$22/+$141 holdout via `-mltopq 0.70`; too weak to ship; retest at 12mo) |
+| 3 | Time-of-day conditioning | ✅ **SHIPPED** (the production gate: −$35 → +$62 total, +$158 → +$506 holdout; live as `tod_stats.json` + `EntryAllowed`) |
+| 4 | Regime mixture-of-experts | ➖ tested as 2-state router (`-router`): −38% drawdown, costs upside; available by flag, not in production |
+| 5 | Passive execution | ❌ **KILLED** as pure-passive (12% fill, adverse selection, holdout −$239); chase variant = P2.3 |
+| 6 | Vol-targeted / Kelly throttle | ❌ **KILLED** (EWMA half-sizing: no value at 6mo) |
+| 7 | Bigger dataset + recency weighting | ◐ recency weighting **KILLED** (holdout spread +0.009 → −0.037); 12-month dataset pending (Phase-1 Task 4) |
+| 8 | Microstructure features | ◐ wiring = Phase-1 Task 2; needs weeks of live collection after |
+| 9 | Lead-lag graph features | ⏳ Phase 2 (P2.1) |
+| 10 | Ensemble abstention | ⏳ Phase 2 (P2.2) |
+| 11 | LLM catalyst features | ⏳ future |
+| 12 | Temporal CNN | ⏳ future (needs 20k+ rows) |
+| 13 | Changepoint watchdog | ✅ **SHIPPED** (CUSUM w/ alarm decay in `internal/evals`; benched dip_bounce + orb_breakout on its first live day) |
+| 14 | Intraday pairs | ⏳ future (needs operator decision on shorting) |
+
 > Rules of the queue (unchanged from QUANT_VISION §5): every idea states its economic
 > *why* before its model, is validated walk-forward through the existing harness
 > (`cmd/backtest` + `ml/train_gate.py`), is judged by pre-registered bars

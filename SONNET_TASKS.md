@@ -2,11 +2,20 @@
 
 > **Who this is for:** a Claude Sonnet session executing well-scoped tasks. The
 > architecture and all judgment calls are already made — implement exactly what's
-> specified, verify, commit. If a task seems to require a design decision not written
-> here, STOP and leave a `// TODO(review)` comment instead of deciding.
+> specified, verify, commit, report. If a task seems to require a design decision not
+> written here, STOP and leave a `// TODO(review)` comment instead of deciding.
 >
 > **Read first:** `CLAUDE.md` (system map), `QUANT_VISION.md` (architecture + eval
-> rules), `RESEARCH_BACKLOG.md` (idea queue).
+> rules), `RESEARCH_BACKLOG.md` (idea queue + status).
+>
+> **Big picture so you don't redo finished work:** the trading system is COMPLETE and
+> live on the paper account — signal engine (6 strategies), learned time-of-day gate,
+> eval scoreboard backend (computation + `/api/evals` + demotion enforcement), LLM entry
+> judge, allocator, manager with Agent-3 exits and restart rehydration, Strategist
+> pre-market agent (with boot catch-up), daily Reviewer, LangGraph research loop
+> (`ml/research_loop.py`). **Phase 1 below is visibility, data collection, hardening,
+> and a bigger-data confirmation — it does NOT change trading logic.** Phase 2 is
+> research and is PERMISSION-GATED: do not start it.
 
 ## Hard guardrails (non-negotiable, apply to every task)
 
@@ -16,54 +25,56 @@
    human's live orders work.
 2. **Never touch the dip watcher** (`backend/internal/dipwatch/`) — the operator's
    Telegram alerts must keep working byte-for-byte.
-3. All new work is **paper-side only** (signals / quant / evals / ml). The AI must never
+3. All work is **paper-side only** (signals / quant / evals / ml). The AI must never
    gain a path to the live keys.
 4. **Do not change pre-registered constants** (`condMinSamples`, `cusumSlack`,
-   `cusumThreshold`, cooldowns, bracket multipliers, gate margins, demotion rules). If an
-   experiment needs a different value, add a FLAG, keep the default, and label the run
-   exploratory in your report.
+   `cusumThreshold`, `cusumDecayN`, cooldowns, bracket multipliers, gate margins,
+   demotion rules). Recent code you must NOT "fix": the Strategist's boot catch-up +
+   `freshFor`, the CUSUM alarm decay, `signal_id` inside judge snapshots — all intended.
 5. Verification bar for every commit, from `backend/`:
-   `go build ./... && go vet ./... && go test ./...` — and if frontend touched, from
-   `frontend/`: `npx tsc --noEmit && npm run build`. All green or don't commit.
+   `"C:\Program Files\Go\bin\go" build ./... && go vet ./... && go test ./...` — and if
+   frontend touched, from `frontend/`: `npx tsc --noEmit && npm run build`. All green or
+   don't commit.
 6. Commit messages: imperative summary + why + evidence; end with
    `Co-Authored-By: Claude <noreply@anthropic.com>`. Push to `origin main`.
 7. Never commit anything under `backend/data/`, any `.env`, or any key material.
 8. Style: match surrounding code (this repo deliberately uses `interface{}`, classic
-   loops, etc. — do NOT mass-apply modernize lints).
-9. Windows environment: Go at `"C:\Program Files\Go\bin\go"`; Python at
-   `ml/.venv/Scripts/python.exe`; run Go commands from `backend/`, Python from repo root
-   with `PYTHONIOENCODING=utf-8`.
+   loops — do NOT mass-apply modernize lints).
+9. Windows environment: run Go from `backend/`; Python is `ml/.venv/Scripts/python.exe`
+   run from the repo root with `PYTHONIOENCODING=utf-8`.
 
 ---
 
-## Task 1 — Quant page: eval scoreboard UI  (frontend, ~1h)
+# PHASE 1 — do these now, in order
 
-`GET /api/evals` already serves (shape in `backend/internal/evals/evals.go`:
-`Scoreboard{generated_at, window_days, strategies[], judge{}, demoted_set[]}`).
+## Task 1 — Quant page: eval scoreboard UI  (frontend only)
+
+The backend is DONE (`backend/internal/evals/evals.go`, served at `GET /api/evals`).
+This task is only the browser display.
 
 - Add TS types to `frontend/src/types.ts` mirroring `Scoreboard`/`StrategyRow`/`JudgeCalib`
-  (note: `strategies` and `demoted_set` may be `null` — guard like `Quant.tsx` does).
+  (JSON field names are in evals.go; `strategies` and `demoted_set` may be `null` —
+  guard like `Quant.tsx` guards its nullables).
 - Add `api.evals()` to `frontend/src/api/client.ts`.
 - In `frontend/src/Quant.tsx`, add a panel **"Strategy scoreboard (rolling 20d)"** below
-  the agents row: table `strategy | signals | outcomes | mean R | traded | status`, where
-  status shows `DEMOTED (reason)` in red (`neg` class) or `active` in green (`pos`).
-  Below it a one-line judge card: decisions, approved/vetoed, veto value R, Brier —
-  render "collecting data…" while `judge.joined < 10`.
-- Poll with the page's existing 5s interval (piggyback the same effect or add one).
-- Verify: tsc + build; then `curl localhost:8080/api/evals` shape matches your types.
+  the agents row: table `strategy | signals | outcomes | mean R | traded | status`;
+  status = `DEMOTED (reason)` styled `neg`, else `active` styled `pos`. Below it one
+  judge line: decisions, approved/vetoed, veto value R, Brier — show "collecting data…"
+  while `judge.joined < 10`. Reuse the page's existing 5s polling pattern.
+- Verify shape against a running backend: `curl localhost:8080/api/evals`.
 
-## Task 2 — Microstructure features into the live shadow journal  (Go, ~1h)  [Backlog #8]
+## Task 2 — Microstructure features into the live shadow journal  (Go)
 
-Goal: every published signal's `features` gains live-only microstructure columns so the
-future ML gate can train on them. Historical replay cannot have these — that's the point.
+Goal: every published signal's `features` gains live-only columns for future ML.
+Historical bars cannot reconstruct these — that's why we record them live.
 
-- In `backend/internal/signals/engine.go`, add a nil-safe hook:
-  `ExtraFeatures func(sym string) map[string]float64` (exported field, set via a
-  `SetExtraFeatures` method with the same mutex pattern as `SetOnSignal`).
-- In `detect()`, after a strategy returns a signal and BEFORE `publish`, merge the hook's
-  map into `sig.Features` (prefix keys exactly as given; do not overwrite existing keys).
-- In `backend/cmd/server/main.go`, wire it where the signal engine is built (needs `scn`
-  and `flowTracker`, both in scope):
+- In `backend/internal/signals/engine.go`: add field
+  `ExtraFeatures func(sym string) map[string]float64` + a `SetExtraFeatures` setter
+  using the same mutex pattern as `SetOnSignal`; in `detect()`, after a strategy returns
+  a signal and BEFORE `publish`, merge the hook's map into `sig.Features` (do not
+  overwrite existing keys; hook may be nil).
+- Wire in `backend/cmd/server/main.go` where `sigEngine` is created (`scn` and
+  `flowTracker` are in scope):
   ```go
   sigEngine.SetExtraFeatures(func(sym string) map[string]float64 {
       out := map[string]float64{}
@@ -80,74 +91,92 @@ future ML gate can train on them. Historical replay cannot have these — that's
       return out
   })
   ```
-  Both reads are in-memory (no I/O) — safe on the bar path.
-- Unit test: engine test with `ExtraFeatures` returning a fixed map → published signal's
-  Features contains the keys.
-- NOTE: scanner covers only DECEPTICON-universe symbols; missing spread is fine (omit
-  the key). Do NOT call any network API in the hook.
+  Both reads are in-memory — no I/O, no network in the hook. Missing spread → omit key.
+- Unit test in `strategies_test.go`: engine with `SetExtraFeatures` returning a fixed
+  map → the published signal's Features contains those keys.
 
-## Task 3 — Reviewer digest upgrade  (Go, ~30m)
+## Task 3 — Reviewer digest upgrade  (Go)
 
-`backend/internal/quant/review.go` `buildInput` currently digests only `agent2_entry`.
-Add, from the same day's records: count of `signal_judge` decisions (approved/vetoed +
-mean confidence), count + notes of `signal_trader` `order` events, top-5 `signal_trader`
-skip reasons, and `strategist` posture if present. Keep the digest compact (it's token
-cost). Test: extend none (no test infra for reviewer) — just build/vet.
+`backend/internal/quant/review.go` `buildInput` digests only `agent2_entry`. Add from
+the same day's records: `signal_judge` decision count + approved/vetoed + mean
+confidence; `signal_trader` order count + notes; top-5 `signal_trader` skip reasons;
+`strategist` posture if present. Keep it compact (token cost). Build/vet is enough.
 
-## Task 4 — 12-month dataset via chunked fetch  (Go + runs, ~2h)  [Backlog #7]
+## Task 4 — 12-month dataset via chunked fetch + confirmation runs  (Go + runs)
 
-The single 357-day fetch stalls on Alpaca rate limits. Fix `loadBars` in
-`backend/cmd/backtest/main.go`:
+Purpose: everything was validated on 6 months; this re-confirms at 12 months and grows
+the ML dataset. The old single 357-day fetch stalls on Alpaca rate limits — fix by
+chunking.
 
-- Add flag `-chunkdays int` (default 0 = old behavior). When >0: split the calendar
-  window into consecutive chunks of that many days; fetch daily bars once (unchanged) and
-  minute bars per chunk via `client.GetMultiIntradayBars(symbols, chunkStart, chunkEnd)`;
-  cache EACH chunk as its own gob (`data/btcache/<start>_<end>_<n>syms.gob`, existing
-  naming) and merge maps (append per symbol, then sort each symbol's bars by Time).
-  Log progress per chunk.
-- Then run, from `backend/` (each may take minutes; use 45-day chunks):
+- In `backend/cmd/backtest/main.go` `loadBars`: add flag `-chunkdays int` (default 0 =
+  current behavior). When >0: split the minute-bar window into consecutive chunks of
+  that many calendar days, fetch each via `client.GetMultiIntradayBars(symbols, cs, ce)`,
+  cache EACH chunk as its own gob (existing `<start>_<end>_<n>syms.gob` naming — chunk
+  bounds make names unique), merge per symbol, sort each symbol's bars by Time. Daily
+  bars: fetch once (unchanged). Log progress per chunk.
+- Then run from `backend/` (minutes each; 45-day chunks):
   ```
-  go run ./cmd/backtest -days 252 -chunkdays 45 -dataset data/ml_dataset_12mo.jsonl        # baseline all-6 + dataset
-  go run ./cmd/backtest -days 252 -chunkdays 45 -tod                                        # champion at 12 months
-  go run ./cmd/backtest -days 252 -chunkdays 45 -tod -router                                # defensive variant
+  go run ./cmd/backtest -days 252 -chunkdays 45 -dataset data/ml_dataset_12mo.jsonl
+  go run ./cmd/backtest -days 252 -chunkdays 45 -tod
+  go run ./cmd/backtest -days 252 -chunkdays 45 -tod -router
   cd .. && PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/train_gate.py --data backend/data/ml_dataset_12mo.jsonl --outdir backend/data --variants clf,rank --halflife 0 --holdout 2026-04-01
   cd backend && go run ./cmd/backtest -days 252 -chunkdays 45 -mlpred data/ml_predictions_rank.jsonl -mltopq 0.70
   ```
-- Report in your summary: the totals/holdout tables exactly as printed + whether the
-  rank-gate selectivity (accepted vs rejected cf avg R) is positive at 12 months. DO NOT
-  change any strategy or promote anything — findings go to the operator.
+- Record ALL printed result tables verbatim in your report. DO NOT change any strategy,
+  constant, or promotion based on the results — findings go to the operator.
 
-## Task 5 — Ops hardening odds & ends  (Go, ~1h)
+## Task 5 — Ops hardening  (Go)
 
-a. `signals.Engine`: the `cool`/`dayCnt` maps grow forever (keys include the day). Add a
-   daily sweep: when the store rolls to a new session day (Store.OnBar day change), clear
-   `dayCnt` entries not from today and `cool` entries older than 24h. Keep it simple and
-   locked correctly.
-b. `evals.Compute` runs fine with missing dirs — add a tiny unit test (tempdir with two
-   fabricated journal files + one decisions file; assert demotion rule and judge join).
-c. `data/evals/proposals_*.json` + `approved_changes.jsonl`: add a `GET /api/proposals`
-   endpoint returning the latest pending proposals file (nil-safe `{"pending": []}`), so
-   the UI can show them later. No frontend work yet.
+a. `signals.Engine`: `cool`/`dayCnt` maps grow forever. When the store rolls to a new
+   session day, sweep `dayCnt` keys not from today and `cool` entries older than 24h
+   (correct locking; keep it simple).
+b. Unit test for `evals.Compute`: tempdir with two fabricated signal-journal files + one
+   decisions file → assert per-strategy counts, the negative-expectancy demotion rule,
+   and the judge join via `signal_id`.
+c. `GET /api/proposals`: return the newest `data/evals/proposals_*.json` content, or
+   `{"pending": []}` when none. Nil-safe like `/api/evals`. No frontend work.
 
-## Task 6 — README + docs sync  (~20m)
+## Task 6 — README + docs sync
 
-- README: add a short "Agent governance" paragraph (scoreboard, demotion, Strategist,
-  LangGraph human-gated research loop) and the two new run commands (`research_loop.py`,
-  `/api/evals`).
-- CLAUDE.md → regenerate AGENTS.md mirror afterwards:
-  `sed 's/(CLAUDE.md)/(AGENTS.md)/' CLAUDE.md > AGENTS.md` (from repo root).
+- README: short "Agent governance" paragraph (scoreboard + demotion, Strategist,
+  LangGraph human-gated research loop) + the `research_loop.py` and `/api/evals`
+  commands.
+- If you edited CLAUDE.md, regenerate the mirror from repo root:
+  `sed 's/(CLAUDE.md)/(AGENTS.md)/' CLAUDE.md > AGENTS.md`.
 
-## Explicitly OUT of scope for you
+## Phase-1 completion report — REQUIRED before anything else
 
-- Anything in RESEARCH_BACKLOG Tier 2 not listed above (lead-lag graph, conformal
-  ensembles, pairs lab, temporal CNN) — these need design judgment.
-- Changing promotion bars, risk limits, strategy parameters, or the universe.
-- Auto-applying research-loop proposals.
-- Frontend redesigns beyond Task 1's panel.
+Write **`SONNET_REPORT.md`** at the repo root: per task — what changed (files), the
+verification output lines (build/vet/test/tsc), any `TODO(review)` left; Task 4's result
+tables verbatim; `git log --oneline` of your commits (pushed). **Then STOP.** Phase 2
+requires the operator's explicit permission after reviewing your report.
 
-## Definition of done (report back with)
+---
 
-1. Per task: what changed, verification output (build/vet/test/tsc lines), and any
-   `TODO(review)` you left.
-2. Task 4's result tables verbatim.
-3. `git log --oneline` of your commits, pushed to origin main.
+# PHASE 2 — research (DO NOT START without operator permission)
+
+Rules: every experiment runs through the existing harness (walk-forward, counterfactual
+selectivity accepted-vs-rejected R, dollar replay); exploratory settings go behind flags
+with defaults unchanged; nothing is promoted to production — results are reported for
+the operator + verifier to judge.
+
+- **P2.1 Sector lead-lag features** (backlog #9, feature stage): in the backtest event
+  loop and via the live `ExtraFeatures` hook, compute per-signal `sector_ret_15m`
+  (mean 15-min return of same-sector universe peers) and `peer_gap_15m` (that mean minus
+  the symbol's own 15-min return). Regenerate the 12-month dataset, retrain clf+rank,
+  report selectivity with vs without the new features (ablation).
+- **P2.2 Ensemble agreement filter** (backlog #10, simplified): using the walk-forward
+  predictions of reg+clf+rank on identical data, accept a signal only when clf EV ≥ 0.03
+  AND rank score ≥ its causal per-strategy 0.70 quantile AND reg ≥ 0. Report selectivity
+  + `-mlpred`-style dollar replay vs each single model. Label clearly as an agreement
+  filter (not formal conformal prediction).
+- **P2.3 Execution model v2** (backlog #5 continuation): passive limit for 3 minutes,
+  then chase-to-market only if unfilled AND price is within 0.1×ATR of the entry;
+  compare net expectancy vs pure-market and pure-passive on 12 months.
+- **P2.4 Research-loop scheduling**: add a Windows Task Scheduler script (PowerShell)
+  that runs `research_loop.py` at 18:30 ET weekdays in non-interactive mode (proposals
+  parked as pending; the human approves via a later interactive run or by reviewing
+  `proposals_*.json`). Document in README.
+
+After Phase 2 reporting, the verifier (Fable session) audits everything before any
+result is promoted.
