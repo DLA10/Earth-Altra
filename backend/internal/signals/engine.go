@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,11 +38,12 @@ type Engine struct {
 	// Set via SetExtraFeatures — reads are synchronized with publishes.
 	ExtraFeatures func(sym string) map[string]float64
 
-	mu      sync.Mutex
-	cool    map[string]int64 // "strategy|symbol" -> last signal unix (30-min cooldown)
-	dayCnt  map[string]int   // "strategy|symbol|day" -> signals published today
-	pending []*pendingOutcome
-	seq     int64
+	mu       sync.Mutex
+	cool     map[string]int64 // "strategy|symbol" -> last signal unix (30-min cooldown)
+	dayCnt   map[string]int   // "strategy|symbol|day" -> signals published today
+	pending  []*pendingOutcome
+	seq      int64
+	sweptDay string // last session day cool/dayCnt were swept for (bounds their growth)
 
 	// Time-of-day conditioning (the promoted Tier-1 mechanism): per (strategy,
 	// half-hour-of-session) running outcome stats, persisted across restarts and
@@ -182,11 +184,39 @@ func (e *Engine) OnBar(sym string, t time.Time, o, h, l, c, v float64) {
 		return
 	}
 	bars := e.store.OnBar(sym, t, o, h, l, c, v)
+	e.sweepOnNewDay()
 	if bars == nil || isCtx {
 		return
 	}
 	e.resolveOutcomes(sym, bars[len(bars)-1])
 	e.detect(sym, bars)
+}
+
+// sweepOnNewDay drops stale cool/dayCnt entries once the store rolls to a new session
+// day, so both maps stay bounded across a long-running process instead of growing
+// forever: cool entries older than 24h, and dayCnt entries not from today.
+func (e *Engine) sweepOnNewDay() {
+	day := e.store.Day()
+	if day == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if day == e.sweptDay {
+		return
+	}
+	e.sweptDay = day
+	cutoff := time.Now().Add(-24 * time.Hour).Unix()
+	for k, last := range e.cool {
+		if last < cutoff {
+			delete(e.cool, k)
+		}
+	}
+	for k := range e.dayCnt {
+		if idx := strings.LastIndex(k, "|"); idx < 0 || k[idx+1:] != day {
+			delete(e.dayCnt, k)
+		}
+	}
 }
 
 // detect runs every strategy on the symbol's latest completed bar.

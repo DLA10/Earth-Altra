@@ -100,6 +100,13 @@ func (s *Store) SessionOpen() int64 {
 	return s.open
 }
 
+// Day returns the ET date the store's current bars belong to ("" before any bar arrived).
+func (s *Store) Day() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.day
+}
+
 // RVOL returns today's cumulative volume for sym relative to the time-adjusted
 // expectation from its 20-day average (flat intraday curve — good enough for gating).
 func (s *Store) RVOL(sym string, now int64) float64 {

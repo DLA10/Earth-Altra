@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -230,6 +232,39 @@ func (s *Server) Routes(r chi.Router) {
 		}
 		writeJSON(w, http.StatusOK, s.Evals())
 	})
+
+	// Research-loop proposals (ml/research_loop.py): the newest pending batch, or
+	// {"pending": []} when none exist yet. Read-only — proposals are always applied by
+	// the operator manually, never from here.
+	r.Get("/api/proposals", s.latestProposals)
+}
+
+func (s *Server) latestProposals(w http.ResponseWriter, r *http.Request) {
+	empty := map[string]interface{}{"pending": []interface{}{}}
+	dir := filepath.Join("data", "evals")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	latest := ""
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, "proposals_") && strings.HasSuffix(n, ".json") && n > latest {
+			latest = n
+		}
+	}
+	if latest == "" {
+		writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, latest))
+	if err != nil {
+		writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
 }
 
 func (s *Server) symbols() []string {
