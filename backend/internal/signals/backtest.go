@@ -104,6 +104,11 @@ type BTConfig struct {
 	// the operator's "avoid the first N minutes" rule (e.g. 65 = no entries before
 	// 10:35 ET). 0 = off.
 	MinEntryMinute int
+
+	// SectorLeadLag (P2.1, RESEARCH_BACKLOG #9): merge sector_ret_15m / peer_gap_15m into
+	// every published signal's Features, computed from the same-day session bars of its
+	// sector peers. Research-only; off by default so existing runs are unaffected.
+	SectorLeadLag bool
 }
 
 // Pre-registered Tier-1 constants — fixed before any experiment ran; never swept.
@@ -635,6 +640,15 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				sig := strat.Detect(sym, bars, ctx)
 				if sig == nil {
 					continue
+				}
+				if cfg.SectorLeadLag {
+					if extra := sectorLeadLagFeatures(uni, sym, func(s string) []Bar { return session[s] }); extra != nil {
+						for k, v := range extra {
+							if _, exists := sig.Features[k]; !exists {
+								sig.Features[k] = v
+							}
+						}
+					}
 				}
 				// Same cooldowns as the live engine, so signal flow matches shadow logs.
 				key := sig.Strategy + "|" + sym

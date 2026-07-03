@@ -107,6 +107,17 @@ func (s *Store) Day() string {
 	return s.day
 }
 
+// BarsCopy returns a copy of sym's session bars so far today (safe to read after the lock
+// releases; nil if sym has no bars yet). Used by the sector lead-lag features (P2.1).
+func (s *Store) BarsCopy(sym string) []Bar {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	arr := s.bars[sym]
+	out := make([]Bar, len(arr))
+	copy(out, arr)
+	return out
+}
+
 // RVOL returns today's cumulative volume for sym relative to the time-adjusted
 // expectation from its 20-day average (flat intraday curve — good enough for gating).
 func (s *Store) RVOL(sym string, now int64) float64 {

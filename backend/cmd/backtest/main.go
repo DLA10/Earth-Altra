@@ -67,6 +67,7 @@ func main() {
 	open30 := flag.Bool("open30", false, "analysis mode: does the first-30-min move predict the rest of the day? (no backtest)")
 	noCache := flag.Bool("nocache", false, "bypass the on-disk bar cache")
 	chunkDays := flag.Int("chunkdays", 0, "fetch the minute-bar window in consecutive chunks of this many calendar days (avoids Alpaca rate-limit stalls on long windows); 0 = single fetch (default)")
+	sectorLag := flag.Bool("sectorlag", false, "P2.1: merge sector_ret_15m/peer_gap_15m into every signal's features (research-only, off by default)")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
 
@@ -112,6 +113,7 @@ func main() {
 		PassiveEntry:   *passive,
 		Throttle:       *throttle,
 		MinEntryMinute: *minEntry,
+		SectorLeadLag:  *sectorLag,
 	}
 	if *mlpred != "" {
 		preds, err := loadPredictions(*mlpred)

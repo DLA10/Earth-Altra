@@ -159,6 +159,13 @@ func (e *Engine) SetExtraFeatures(fn func(sym string) map[string]float64) {
 	e.mu.Unlock()
 }
 
+// SectorLeadLag computes sym's live sector_ret_15m / peer_gap_15m (P2.1, RESEARCH_BACKLOG
+// #9) from today's session bars. Meant to be folded into an ExtraFeatures hook (nil map
+// if not yet computable — e.g. under 15 minutes into the session).
+func (e *Engine) SectorLeadLag(sym string) map[string]float64 {
+	return sectorLeadLagFeatures(e.uni, sym, e.store.BarsCopy)
+}
+
 // SeedDaily installs a symbol's daily ATR / avg-volume context (startup REST seed).
 func (e *Engine) SeedDaily(sym string, atr, avgVol float64) { e.store.SetDaily(sym, atr, avgVol) }
 

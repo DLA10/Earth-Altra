@@ -196,6 +196,11 @@ func main() {
 			if tot := p.RollBuyVol + p.RollSellVol; tot > 0 {
 				out["flow_buy_frac"] = p.RollBuyVol / tot
 			}
+			// P2.1: sector lead-lag (RESEARCH_BACKLOG #9) — reconstructable from bars, but
+			// computed here too so live journal rows carry it without waiting on a backfill.
+			for k, v := range sigEngine.SectorLeadLag(sym) {
+				out[k] = v
+			}
 			return out
 		})
 		log.Printf("signals: SHADOW scanning %d symbols (+%d context) across %d strategies → data/signals/",
