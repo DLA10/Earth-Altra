@@ -5,13 +5,13 @@
 | # | Idea | Verdict |
 |---|---|---|
 | 1 | First-hour reversal | ❌ **KILLED** (−$515/6mo standalone; open30 analysis: corr +0.017 — no reversal effect in this universe). Detector kept shadow-only; TOD gate benches it |
-| 2 | Cross-sectional ranking gate | ➖ **BENCHED** (only ML variant positive in dollars: +$22/+$141 holdout via `-mltopq 0.70`; too weak to ship; retest at 12mo) |
-| 3 | Time-of-day conditioning | ✅ **SHIPPED** (the production gate: −$35 → +$62 total, +$158 → +$506 holdout; live as `tod_stats.json` + `EntryAllowed`) |
+| 2 | Cross-sectional ranking gate | ➖ **BENCHED — 12-mo retest FAILED** (rank gate at `-mltopq 0.70` on 246 days: accepted-R −0.020 < rejected-R +0.009, i.e. anti-selection; fails the promotion bar again; stays off order flow) |
+| 3 | Time-of-day conditioning | ✅ SHIPPED, now **⚠ REGIME-DEPENDENT** (promoted on 6-mo: −$35→+$62, holdout +$158→+$506; 12-mo recheck HURT: base −$718 → TOD −$961 — Jul–Dec 2025 regime inverts the buckets. Verdict: keep live on paper — its buckets update from live outcomes and CUSUM/demotion adjudicate — but do NOT extend its authority; re-review after ~1 month of live outcomes) |
 | 4 | Regime mixture-of-experts | ➖ tested as 2-state router (`-router`): −38% drawdown, costs upside; available by flag, not in production |
 | 5 | Passive execution | ❌ **KILLED** as pure-passive (12% fill, adverse selection, holdout −$239); chase variant = P2.3 |
 | 6 | Vol-targeted / Kelly throttle | ❌ **KILLED** (EWMA half-sizing: no value at 6mo) |
-| 7 | Bigger dataset + recency weighting | ◐ recency weighting **KILLED** (holdout spread +0.009 → −0.037); 12-month dataset pending (Phase-1 Task 4) |
-| 8 | Microstructure features | ◐ wiring = Phase-1 Task 2; needs weeks of live collection after |
+| 7 | Bigger dataset + recency weighting | ◐ recency weighting **KILLED** (holdout spread +0.009 → −0.037); 12-month dataset **DONE** (Phase-1 Task 4: 17,511 rows Jul 2025–Jul 2026 in `ml_dataset_12mo.jsonl`; clf holdout spread +0.021 — selectivity real but still fails the dollar bar; full tables in SONNET_REPORT.md) |
+| 8 | Microstructure features | ◐ wiring **DONE** (Phase-1 Task 2: `spread_bps`/`flow_delta_5m`/`flow_buy_frac` journal live); needs weeks of live collection before it's usable |
 | 9 | Lead-lag graph features | ⏳ Phase 2 (P2.1) |
 | 10 | Ensemble abstention | ⏳ Phase 2 (P2.2) |
 | 11 | LLM catalyst features | ⏳ future |
