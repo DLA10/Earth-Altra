@@ -390,6 +390,38 @@ export interface QuantResponse {
   report?: QuantReport;
 }
 
+// Eval scoreboard (backend/internal/evals/evals.go) — rolling per-strategy counterfactual
+// expectancy + CUSUM watchdog + LLM-judge calibration. Served at GET /api/evals; the
+// handler returns {enabled:false} until the first computation completes.
+export interface StrategyRow {
+  strategy: string;
+  signals: number;
+  outcomes: number;
+  mean_r: number;
+  traded: number;
+  cusum_alarm: boolean;
+  demoted: boolean;
+  reason?: string;
+}
+export interface JudgeCalib {
+  decisions: number;
+  approved: number;
+  vetoed: number;
+  joined: number;
+  approved_mean_r: number;
+  vetoed_mean_r: number;
+  veto_value_r: number;
+  brier: number;
+}
+export interface Scoreboard {
+  enabled?: boolean;
+  generated_at: string;
+  window_days: number;
+  strategies: StrategyRow[] | null;
+  judge: JudgeCalib;
+  demoted_set: string[] | null;
+}
+
 export type WsMessage =
   | { type: "candle"; data: CandleUpdate }
   | { type: "quote"; data: Quote }

@@ -19,6 +19,7 @@ import type {
   Readiness,
   ScanBar,
   ScanState,
+  Scoreboard,
   StockNews,
   SymbolMeta,
   VwapPoint,
@@ -113,6 +114,9 @@ export const api = {
 
   // Quant pipeline (dip-driven AI team) on the Claude paper account.
   quant: () => req<QuantResponse>("/api/quant"),
+
+  // Eval scoreboard (rolling strategy expectancy + judge calibration).
+  evals: () => req<Scoreboard>("/api/evals"),
 
   // DECEPTICON
   decepticonWatchlist: () => req<DecepticonWatchlist>("/api/decepticon/watchlist"),

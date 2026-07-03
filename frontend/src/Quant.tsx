@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/client";
-import type { QuantReport } from "./types";
+import type { QuantReport, Scoreboard } from "./types";
 
 // Quant renders the dip-driven AI team on the Claude paper account: the deterministic detector →
 // Agent 2 (entry, Opus) → shared-budget allocator → Agent 3 (exit, Haiku), plus Agent 4
@@ -9,6 +9,7 @@ export function Quant() {
   const [rep, setRep] = useState<QuantReport | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [err, setErr] = useState("");
+  const [scoreboard, setScoreboard] = useState<Scoreboard | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -22,6 +23,26 @@ export function Quant() {
           setErr("");
         })
         .catch((e) => alive && setErr(String(e)));
+    load();
+    const id = window.setInterval(load, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .evals()
+        .then((sb) => {
+          if (!alive) return;
+          setScoreboard(sb.enabled === false ? null : sb);
+        })
+        .catch(() => {
+          /* scoreboard is best-effort; keep last known value on error */
+        });
     load();
     const id = window.setInterval(load, 5000);
     return () => {
@@ -87,6 +108,48 @@ export function Quant() {
         <AgentChip name="Allocator" role={`shared budget · ${a.open_count}/${a.max_concurrent} slots`} />
         <AgentChip name="Agent 3 · Exit" role="Haiku — trailing stop + verbs" />
         <AgentChip name="Agent 4 · Sentiment" role="local gemma2:2b" />
+      </div>
+
+      {/* Strategy scoreboard (rolling 20d) */}
+      <div className="panel">
+        <div className="panel-title">Strategy scoreboard (rolling 20d)</div>
+        {!scoreboard || !(scoreboard.strategies ?? []).length ? (
+          <p className="muted">collecting data…</p>
+        ) : (
+          <>
+            <table className="q-table">
+              <thead>
+                <tr><th>Strategy</th><th>Signals</th><th>Outcomes</th><th>Mean R</th><th>Traded</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {(scoreboard.strategies ?? []).map((row) => (
+                  <tr key={row.strategy}>
+                    <td className="mono-strong">{row.strategy}</td>
+                    <td>{row.signals}</td>
+                    <td>{row.outcomes}</td>
+                    <td className={cls(row.mean_r)}>{row.mean_r.toFixed(2)}</td>
+                    <td>{row.traded}</td>
+                    <td className={row.demoted ? "neg" : "pos"}>
+                      {row.demoted ? `DEMOTED (${row.reason})` : "active"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="attr-verdict">
+              {scoreboard.judge.joined < 10 ? (
+                "Judge calibration: collecting data…"
+              ) : (
+                <>
+                  Judge: {scoreboard.judge.decisions} decisions ({scoreboard.judge.approved} approved /{" "}
+                  {scoreboard.judge.vetoed} vetoed) · veto value{" "}
+                  <b className={cls(scoreboard.judge.veto_value_r)}>{scoreboard.judge.veto_value_r.toFixed(2)}R</b> ·
+                  Brier {scoreboard.judge.brier.toFixed(3)}
+                </>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Agent-3 value attribution */}
