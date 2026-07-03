@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -136,8 +137,17 @@ func (r *Reviewer) buildInput(day string, records []LogRecord, state QuantState)
 		Reason     string  `json:"reason"`
 	}
 	var agent2 []dec
+
+	var judgeDecisions, judgeApproved, judgeVetoed int
+	var judgeConfSum float64
+	var traderOrders int
+	var traderNotes []string
+	skipCounts := map[string]int{}
+	strategistPosture := ""
+
 	for _, rec := range records {
-		if rec.Agent == "agent2_entry" && rec.Event == "decision" {
+		switch {
+		case rec.Agent == "agent2_entry" && rec.Event == "decision":
 			var ed EntryDecision
 			if rec.Output != nil {
 				b, _ := json.Marshal(rec.Output)
@@ -149,11 +159,63 @@ func (r *Reviewer) buildInput(day string, records []LogRecord, state QuantState)
 				noBuys++
 			}
 			agent2 = append(agent2, dec{Symbol: rec.Symbol, Action: ed.Action, Confidence: ed.Confidence, Reason: ed.Reason})
+		case rec.Agent == "signal_judge" && rec.Event == "decision":
+			var ed EntryDecision
+			if rec.Output != nil {
+				b, _ := json.Marshal(rec.Output)
+				_ = json.Unmarshal(b, &ed)
+			}
+			judgeDecisions++
+			judgeConfSum += ed.Confidence
+			if ed.IsBuy() {
+				judgeApproved++
+			} else {
+				judgeVetoed++
+			}
+		case rec.Agent == "signal_trader" && rec.Event == "order":
+			traderOrders++
+			traderNotes = append(traderNotes, rec.Note)
+		case rec.Agent == "signal_trader" && rec.Event == "skip":
+			reason := rec.Note
+			if i := strings.Index(rec.Note, ": "); i > 0 {
+				reason = rec.Note[i+2:]
+			}
+			skipCounts[reason]++
+		case rec.Agent == "strategist" && rec.Event == "decision":
+			if m, ok := rec.Output.(map[string]interface{}); ok {
+				if p, ok := m["posture"].(string); ok {
+					strategistPosture = p
+				}
+			}
 		}
 		if rec.Event == "error" {
 			errors++
 		}
 	}
+
+	type skipReason struct {
+		Reason string `json:"reason"`
+		Count  int    `json:"count"`
+	}
+	var topSkips []skipReason
+	for reason, count := range skipCounts {
+		topSkips = append(topSkips, skipReason{reason, count})
+	}
+	sort.Slice(topSkips, func(i, j int) bool {
+		if topSkips[i].Count != topSkips[j].Count {
+			return topSkips[i].Count > topSkips[j].Count
+		}
+		return topSkips[i].Reason < topSkips[j].Reason
+	})
+	if len(topSkips) > 5 {
+		topSkips = topSkips[:5]
+	}
+
+	judgeMeanConf := 0.0
+	if judgeDecisions > 0 {
+		judgeMeanConf = round2(judgeConfSum / float64(judgeDecisions))
+	}
+
 	digest := map[string]interface{}{
 		"date":             day,
 		"realized_pnl":     round2(state.RealizedPNL),
@@ -165,6 +227,20 @@ func (r *Reviewer) buildInput(day string, records []LogRecord, state QuantState)
 		"errors":           errors,
 		"closed_trades":    state.Trades,
 		"agent2_decisions": agent2,
+		"signal_judge": map[string]interface{}{
+			"decisions":       judgeDecisions,
+			"approved":        judgeApproved,
+			"vetoed":          judgeVetoed,
+			"mean_confidence": judgeMeanConf,
+		},
+		"signal_trader": map[string]interface{}{
+			"orders": traderOrders,
+			"notes":  traderNotes,
+		},
+		"signal_trader_top_skip_reasons": topSkips,
+	}
+	if strategistPosture != "" {
+		digest["strategist_posture"] = strategistPosture
 	}
 	b, _ := json.Marshal(digest)
 	return string(b)
