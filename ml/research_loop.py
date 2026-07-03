@@ -35,16 +35,20 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "backend" / "data"
 
 
-def env_key() -> str:
-    """Read ANTHROPIC_API_KEY from the backend .env (never committed)."""
-    if k := os.environ.get("ANTHROPIC_API_KEY"):
-        return k
+def env_get(name: str) -> str:
+    """Read a variable from the environment or the backend .env (never committed)."""
+    if v := os.environ.get(name):
+        return v
     envfile = ROOT / "backend" / ".env"
     if envfile.exists():
         for line in envfile.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("ANTHROPIC_API_KEY="):
+            if line.strip().startswith(name + "="):
                 return line.split("=", 1)[1].strip()
     return ""
+
+
+def env_key() -> str:
+    return env_get("ANTHROPIC_API_KEY")
 
 
 class LoopState(TypedDict, total=False):
@@ -104,8 +108,12 @@ def evaluate(state: LoopState) -> LoopState:
         if d.get("agent") == "signal_trader" and d.get("event") == "skip":
             reason = d.get("note", "").split(": ", 1)[-1][:60]
             skips[reason] += 1
+    symbols_seen = {s["signal"].get("symbol") for s in raw["signals"]}
+    import datetime
     digest = {
         "day": state["day"],
+        "as_of": datetime.datetime.now().astimezone().isoformat(timespec="minutes"),
+        "universe_symbols_with_signals": sorted(x for x in symbols_seen if x),
         "per_strategy": strategies,
         "agent_activity": dict(agents),
         "paper_entries": trades,
@@ -139,15 +147,24 @@ PROPOSAL_SCHEMA = {
     "required": ["proposals"],
 }
 
-REVIEWER_SYSTEM = """You are the post-market research reviewer for an intraday quant desk
-(long-only, paper account, consistency over peak profits). You receive a deterministic digest of
-one trading day: per-strategy signal/outcome stats, agent activity, actual paper entries, skip
-reasons, and the rolling scoreboard. Propose AT MOST 3 specific, evidence-cited parameter or rule
-changes that move the desk toward CONSISTENT profitability — or propose NOTHING if the day doesn't
-justify change (stability is part of consistency; one red day is rarely evidence). Every proposal
-must cite numbers from the digest, name a concrete target knob, and will be reviewed by a human
-before anything is applied. Never propose changes to live-money code, the dip-watcher alerts, or
-risk caps upward. Call record_proposals."""
+REVIEWER_SYSTEM = """You are the research reviewer for an intraday quant desk (long-only, paper
+account, consistency over peak profits). You receive a deterministic digest: per-strategy
+signal/outcome stats across the whole universe, agent activity, actual paper entries, skip
+reasons, and the rolling scoreboard.
+
+YOUR DEFAULT OUTPUT IS ZERO PROPOSALS. Stability is part of consistency, and the deterministic
+layers (time-of-day gate, scoreboard demotion, CUSUM watchdog, loss cap) already self-correct —
+most problems fix themselves without a rule change. Propose a change ONLY when the evidence bar
+is met, ALL of: (1) the SAME failure pattern appears across ≥3 trading days OR ≥30 outcomes for
+that specific claim — a single session is NEVER sufficient evidence, whatever happened; (2) no
+existing automatic mechanism already handles it; (3) you can cite the exact numbers. If the
+digest's as_of is mid-session (before the 16:00 close), the day is incomplete — treat it as an
+informational pulse and hold the bar even higher. When you propose nothing, say why in
+no_change_reason (one short plain-English paragraph a novice can read).
+
+Hard limits: at most 3 proposals; never touch live-money code, the dip-watcher alerts, risk caps
+upward, or pre-registered eval constants. Every proposal is applied by a HUMAN, later, manually.
+Call record_proposals."""
 
 
 def propose(state: LoopState) -> LoopState:
@@ -199,9 +216,51 @@ def apply_node(state: LoopState) -> LoopState:
     return {"status": "done"}
 
 
+def notify_telegram(state: LoopState) -> None:
+    """Send the report to the operator's Telegram (same bot as the dip watcher)."""
+    token, chat = env_get("TELEGRAM_BOT_TOKEN"), env_get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        print("[notify] telegram not configured — skipping")
+        return
+    d = state.get("digest", {})
+    per = d.get("per_strategy", {})
+    lines = [f"🧪 Research loop — {d.get('day')} (as of {d.get('as_of', '')[-11:-6]})"]
+    tot_sig = sum(v.get("signals", 0) for v in per.values())
+    tot_out = sum(v.get("outcomes", 0) for v in per.values())
+    lines.append(f"signals {tot_sig} · outcomes {tot_out} · paper entries {len(d.get('paper_entries', []))} · symbols {len(d.get('universe_symbols_with_signals', []))}")
+    for k, v in per.items():
+        if v.get("outcomes"):
+            lines.append(f"• {k}: {v['outcomes']} outcomes, mean R {v['mean_r']:+.2f} ({v['targets']}T/{v['stops']}S)")
+    sb = d.get("scoreboard") or {}
+    if dem := sb.get("demoted_set"):
+        lines.append("⛔ demoted: " + ", ".join(dem))
+    props = state.get("proposals") or []
+    if props:
+        lines.append(f"\n📋 {len(props)} proposed change(s) — YOUR call, nothing auto-applies:")
+        for i, p in enumerate(props, 1):
+            lines.append(f"{i}. [{p['target']}] {p['change']}\n   why: {p['evidence'][:200]}")
+        lines.append("(full details: backend/data/evals/proposals_%s.json)" % d.get("day"))
+    else:
+        lines.append("\n✅ no changes proposed — system judged today's evidence insufficient for tinkering")
+    text = "\n".join(lines)[:3800]
+
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=json.dumps({"chat_id": chat, "text": text}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[notify] telegram: {resp.status}")
+    except Exception as e:  # noqa: BLE001 — never let notification kill the loop
+        print(f"[notify] telegram failed: {e}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--day", default=None, help="trading day (default: latest journal)")
+    ap.add_argument("--notify", action="store_true", help="send the report to Telegram")
     args = ap.parse_args()
 
     day = args.day
@@ -244,6 +303,9 @@ def main() -> None:
 
     graph.update_state(cfg, {"approved": approved})
     graph.invoke(None, cfg)  # resume: apply
+
+    if args.notify:
+        notify_telegram(graph.get_state(cfg).values)
 
 
 if __name__ == "__main__":

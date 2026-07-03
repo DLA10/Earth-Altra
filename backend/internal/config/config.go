@@ -92,6 +92,9 @@ type Config struct {
 	QuantStrategistModel string
 	// QuantStrategist enables the pre-market posture/allocation agent.
 	QuantStrategist bool
+	// ResearchLoop auto-runs ml/research_loop.py at 13:30 ET (market open + 4h) on
+	// weekdays and delivers the report to Telegram. Proposals are never auto-applied.
+	ResearchLoop bool
 }
 
 const (
@@ -141,6 +144,7 @@ func Load() (*Config, error) {
 		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
+		ResearchLoop:         envBool("RESEARCH_LOOP", true),
 	}
 
 	c.QuantUniverseCandidates = []string{

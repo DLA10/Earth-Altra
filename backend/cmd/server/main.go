@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os/exec"
 	"context"
 	"encoding/json"
 	"flag"
@@ -399,6 +400,13 @@ func main() {
 		}
 	}
 
+	// Research loop: auto-run at 13:30 ET (open + 4h) on weekdays; the Python side
+	// analyzes the session so far, asks Opus for (rarely) proposals, and reports to
+	// Telegram. Proposals are NEVER auto-applied — the operator changes knobs manually.
+	if cfg.ResearchLoop {
+		go runResearchLoop(ctx)
+	}
+
 	if dw.Enabled() {
 		dw.Start(ctx)
 		log.Printf("dip watcher: ENABLED for the full watchlist (%d symbols, 5-min bounce confirm)", len(watchMgr.All()))
@@ -695,6 +703,49 @@ func seedSignalEngine(client *alpaca.Client, se *signals.Engine, symbols []strin
 		se.SeedBars(sym, sb)
 	}
 	log.Printf("signals: seeded %d daily contexts, %d intraday sessions", len(daily), len(intra))
+}
+
+// runResearchLoop fires ml/research_loop.py once per weekday at 13:30 ET (open + 4h),
+// non-interactively with Telegram delivery. Best-effort: a failure logs and retries the
+// next day; it can never affect trading.
+func runResearchLoop(ctx context.Context) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	lastDay := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().In(loc)
+			day := now.Format("2006-01-02")
+			weekday := now.Weekday() >= time.Monday && now.Weekday() <= time.Friday
+			if !weekday || day == lastDay || now.Hour() != 13 || now.Minute() < 30 || now.Minute() > 40 {
+				continue
+			}
+			lastDay = day
+			go func() {
+				cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+				defer cancel()
+				cmd := exec.CommandContext(cctx, "../ml/.venv/Scripts/python.exe", "../ml/research_loop.py", "--notify")
+				cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
+				out, err := cmd.CombinedOutput()
+				tail := string(out)
+				if len(tail) > 600 {
+					tail = tail[len(tail)-600:]
+				}
+				if err != nil {
+					log.Printf("research-loop: failed: %v | %s", err, tail)
+					return
+				}
+				log.Printf("research-loop: done | %s", tail)
+			}()
+		}
+	}
 }
 
 // marketStateFrom derives the Strategist's deterministic pre-market picture from
