@@ -182,6 +182,22 @@ func main() {
 		sigEngine = signals.NewEngine(uni, "data")
 		sigSymbols = uni.All()
 		go seedSignalEngine(client, sigEngine, sigSymbols)
+		// Live-only microstructure columns (spread, order flow) for the ML training set —
+		// historical bars can't reconstruct these, so they only get recorded live.
+		sigEngine.SetExtraFeatures(func(sym string) map[string]float64 {
+			out := map[string]float64{}
+			if scn != nil {
+				if st, ok := scn.Get(sym); ok && st.Price > 0 && st.Spread > 0 {
+					out["spread_bps"] = st.Spread / st.Price * 10000
+				}
+			}
+			p := flowTracker.Snapshot(sym)
+			out["flow_delta_5m"] = p.RollBuyVol - p.RollSellVol
+			if tot := p.RollBuyVol + p.RollSellVol; tot > 0 {
+				out["flow_buy_frac"] = p.RollBuyVol / tot
+			}
+			return out
+		})
 		log.Printf("signals: SHADOW scanning %d symbols (+%d context) across %d strategies → data/signals/",
 			len(uni.Symbols()), len(uni.Context()), len(signals.DefaultStrategies()))
 	}

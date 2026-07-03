@@ -220,3 +220,33 @@ func TestEngineCooldownAndOutcome(t *testing.T) {
 		t.Fatalf("outcome not resolved; %d pending", pendingLeft)
 	}
 }
+
+func TestEngineExtraFeaturesMergedIntoPublishedSignal(t *testing.T) {
+	uni := &Universe{ContextSymbols: []string{"QQQ"}, Sectors: map[string][]string{"test": {"AAA"}},
+		sectorOf: map[string]string{"AAA": "test"}}
+	e := NewEngine(uni, t.TempDir())
+	e.SeedDaily("AAA", 2.0, 5_000_000)
+
+	open := sessionOpenUnix(t)
+	var published []Signal
+	e.OnSignal = func(s Signal) { published = append(published, s) }
+	e.SetExtraFeatures(func(sym string) map[string]float64 {
+		return map[string]float64{"spread_bps": 4.2, "flow_delta_5m": 1234.0, "flow_buy_frac": 0.6}
+	})
+
+	for i := 0; i < 15; i++ {
+		e.OnBar("AAA", time.Unix(open+int64(i)*60, 0), 100.2, 101.0, 100.0, 100.5, 900_000)
+	}
+	for i := 15; i < 25; i++ {
+		e.OnBar("AAA", time.Unix(open+int64(i)*60, 0), 100.5, 100.9, 100.3, 100.6, 900_000)
+	}
+	e.OnBar("AAA", time.Unix(open+25*60, 0), 100.9, 101.5, 100.8, 101.3, 3_000_000)
+
+	if len(published) != 1 {
+		t.Fatalf("expected 1 published signal, got %d", len(published))
+	}
+	f := published[0].Features
+	if f["spread_bps"] != 4.2 || f["flow_delta_5m"] != 1234.0 || f["flow_buy_frac"] != 0.6 {
+		t.Fatalf("extra features not merged into published signal: %+v", f)
+	}
+}

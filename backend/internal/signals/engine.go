@@ -31,6 +31,12 @@ type Engine struct {
 	// Set via SetOnSignal after construction — reads are synchronized with publishes.
 	OnSignal func(Signal)
 
+	// ExtraFeatures, when set, is called for every detected signal (before publish) to
+	// merge live-only microstructure columns (spread, order flow) into sig.Features —
+	// columns historical bars can't reconstruct, so they only exist in the live journal.
+	// Set via SetExtraFeatures — reads are synchronized with publishes.
+	ExtraFeatures func(sym string) map[string]float64
+
 	mu      sync.Mutex
 	cool    map[string]int64 // "strategy|symbol" -> last signal unix (30-min cooldown)
 	dayCnt  map[string]int   // "strategy|symbol|day" -> signals published today
@@ -143,6 +149,14 @@ func (e *Engine) SetOnSignal(fn func(Signal)) {
 	e.mu.Unlock()
 }
 
+// SetExtraFeatures installs the live microstructure-feature hook (safe to call after the
+// stream started).
+func (e *Engine) SetExtraFeatures(fn func(sym string) map[string]float64) {
+	e.mu.Lock()
+	e.ExtraFeatures = fn
+	e.mu.Unlock()
+}
+
 // SeedDaily installs a symbol's daily ATR / avg-volume context (startup REST seed).
 func (e *Engine) SeedDaily(sym string, atr, avgVol float64) { e.store.SetDaily(sym, atr, avgVol) }
 
@@ -195,10 +209,24 @@ func (e *Engine) detect(sym string, bars []Bar) {
 		MarketOK:    mktOK,
 		MarketPct:   mktPct,
 	}
+	e.mu.Lock()
+	extra := e.ExtraFeatures
+	e.mu.Unlock()
+
 	for _, st := range e.strats {
 		sig := st.Detect(sym, bars, ctx)
 		if sig == nil {
 			continue
+		}
+		if extra != nil {
+			if sig.Features == nil {
+				sig.Features = map[string]float64{}
+			}
+			for k, v := range extra(sym) {
+				if _, exists := sig.Features[k]; !exists {
+					sig.Features[k] = v
+				}
+			}
 		}
 		e.publish(*sig)
 	}
