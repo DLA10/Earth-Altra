@@ -24,6 +24,7 @@ const (
 	demoteMinOutcomes = 30
 	cusumSlack        = 0.05
 	cusumThreshold    = 3.0
+	cusumDecayN       = 30 // an alarm stops demoting after this many subsequent outcomes
 )
 
 // StrategyRow is one strategy's scoreboard line.
@@ -249,17 +250,23 @@ func Compute(dataDir string, windowDays int, loc *time.Location) (*Scoreboard, e
 		if a.outcomes > 0 {
 			row.MeanR = a.sumR / float64(a.outcomes)
 		}
-		// CUSUM watchdog on the chronological outcome stream.
-		cs := 0.0
-		for _, r := range a.rs {
+		// CUSUM watchdog on the chronological outcome stream. The statistic resets
+		// after each alarm, and an alarm only DEMOTES while it is recent (within the
+		// last cusumDecayN outcomes) — a strategy that stops bleeding and posts
+		// cusumDecayN clean outcomes earns its way back automatically instead of
+		// sitting benched for the whole window.
+		cs, lastAlarm := 0.0, -1
+		for i, r := range a.rs {
 			cs += -r - cusumSlack
 			if cs < 0 {
 				cs = 0
 			}
 			if cs > cusumThreshold {
-				row.CusumAlarm = true
+				lastAlarm = i
+				cs = 0
 			}
 		}
+		row.CusumAlarm = lastAlarm >= 0 && lastAlarm >= len(a.rs)-cusumDecayN
 		switch {
 		case a.outcomes >= demoteMinOutcomes && row.MeanR < 0:
 			row.Demoted, row.Reason = true, "negative rolling expectancy"

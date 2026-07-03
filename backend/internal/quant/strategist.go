@@ -67,10 +67,22 @@ var strategistSchema = map[string]interface{}{
 }
 
 // RunDaily generates the day's config once each weekday in the 08:50–09:25 ET window.
+// Boot catch-up: if the process starts LATER in the trading day and today's config was
+// never written (e.g. the backend was down pre-market), it generates immediately —
+// otherwise yesterday's posture/allocation would silently govern today.
 func (s *Strategist) RunDaily(ctx context.Context) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
 	lastDay := ""
+	if now := time.Now().In(s.loc); now.Weekday() >= time.Monday && now.Weekday() <= time.Friday &&
+		now.Hour() >= 8 && now.Hour() < 15 && !s.freshFor(now.Format("2006-01-02")) {
+		day := now.Format("2006-01-02")
+		if err := s.Generate(day); err != nil {
+			log.Printf("[strategist] boot catch-up for %s failed: %v", day, err)
+		} else {
+			lastDay = day
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -172,6 +184,18 @@ func (s *Strategist) Generate(day string) error {
 	}
 	log.Printf("[strategist] %s: posture=%s budget=$%.0f per=$%.0f conc=%d — %s", day, posture, budget, perPos, maxConc, notes)
 	return nil
+}
+
+// freshFor reports whether daily_universe.json already carries today's date.
+func (s *Strategist) freshFor(day string) bool {
+	b, err := os.ReadFile(filepath.Join(s.dataDir, "daily_universe.json"))
+	if err != nil {
+		return false
+	}
+	var du struct {
+		Date string `json:"date"`
+	}
+	return json.Unmarshal(b, &du) == nil && du.Date == day
 }
 
 // fallback is the pure-rules config used when the LLM is unavailable.
