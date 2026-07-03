@@ -179,6 +179,11 @@ func (s *Strategist) Generate(day string) error {
 	if err := os.WriteFile(filepath.Join(s.dataDir, "daily_universe.json"), b, 0o644); err != nil {
 		return err
 	}
+	// Archive a dated copy so the morning-config history survives (the live file above
+	// is overwritten daily; the archive never is).
+	if dir := filepath.Join(s.dataDir, "strategist"); os.MkdirAll(dir, 0o755) == nil {
+		_ = os.WriteFile(filepath.Join(dir, day+".json"), b, 0o644)
+	}
 	if s.reload != nil {
 		s.reload()
 	}
