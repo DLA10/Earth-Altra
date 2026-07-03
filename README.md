@@ -95,6 +95,28 @@ rail (sizing, budget, stops, halts) is enforced in code they cannot override.
   during market hours without placing orders — growing the training set daily and
   cross-checking the backtester against reality for free.
 
+## Agent governance
+
+A rolling **eval scoreboard** (`GET /api/evals`) scores every strategy on the last 20
+trading days of counterfactual outcomes — mean R and a CUSUM changepoint watchdog — and
+auto-demotes any strategy with proven negative expectancy (it keeps journaling but stops
+trading); the same scoreboard calibrates the LLM entry judge (veto value in R, Brier
+score). A pre-market **Strategist** agent reads the scoreboard + latest review and sets
+the day's posture (normal/cautious/stand-down) and budget within hard clamps, with a
+boot-catch-up so a late start doesn't skip the day. A **LangGraph research loop**
+(`ml/research_loop.py`) runs daily, deterministically digests the day (journals,
+decisions, scoreboard), and asks Opus for at most 3 evidence-cited change proposals —
+**human-gated**: it interrupts before applying anything, and every proposal is applied
+manually by the operator, never auto-applied. Pending batches are served at
+`GET /api/proposals`.
+
+```powershell
+cd backend; go run ./cmd/server                                        # scoreboard recomputes every 10 min
+curl http://localhost:8080/api/evals                                   # rolling strategy scoreboard + judge calibration
+curl http://localhost:8080/api/proposals                                # latest pending research-loop proposals
+PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/research_loop.py  # run the research loop once (human gate on apply)
+```
+
 ## Tech stack
 
 | Layer | Choices |
