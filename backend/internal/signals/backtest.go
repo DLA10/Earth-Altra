@@ -97,6 +97,12 @@ type BTConfig struct {
 	// limit at the signal price for passiveWindowMin minutes; fill (at the limit, no
 	// slippage) only if price trades through it, else the trade is missed.
 	PassiveEntry bool
+	// ChaseExecution (P2.3, RESEARCH_BACKLOG #5 continuation — execution model v2): rest a
+	// limit at the signal price for chaseWindowMin minutes; if still unfilled at expiry
+	// AND price is within chaseATRMult*ATR of the original entry, chase to market (fill at
+	// the current close + slippage) instead of missing the trade. Mutually exclusive with
+	// PassiveEntry — pick one execution model per run. Research-only; off by default.
+	ChaseExecution bool
 	// Throttle (#6): halve position size for a strategy whose EWMA of realized R
 	// (α = throttleAlpha, ≥ condMinSamples observations) is negative.
 	Throttle bool
@@ -135,6 +141,12 @@ const (
 	condMinScores    = 100  // prior scores required before the top-quantile gate applies
 	passiveWindowMin = 5    // minutes a passive limit rests before it is cancelled
 	throttleAlpha    = 0.05 // EWMA weight for the sizing throttle
+)
+
+// Pre-registered P2.3 constants — fixed before this experiment ran; never swept.
+const (
+	chaseWindowMin = 3   // minutes a chase-execution limit rests before chasing/missing
+	chaseATRMult   = 0.1 // chase to market only within this many ATRs of the entry
 )
 
 // DatasetRow is one ML training example: a signal's features and what its bracket did.
@@ -236,6 +248,12 @@ type BTResult struct {
 	PassiveFills    int `json:"passive_fills,omitempty"`    // #5 filled
 	PassiveMisses   int `json:"passive_misses,omitempty"`   // #5 expired unfilled
 	ThrottledHalf   int `json:"throttled_half,omitempty"`   // #6 half-sized entries
+
+	// P2.3 chase-execution accounting.
+	ChaseAttempts     int `json:"chase_attempts,omitempty"`      // limit orders rested
+	ChasePassiveFills int `json:"chase_passive_fills,omitempty"` // filled passively within the window
+	ChaseMarketFills  int `json:"chase_market_fills,omitempty"`  // chased to market at expiry
+	ChaseMisses       int `json:"chase_misses,omitempty"`        // expired unfilled AND too far to chase
 }
 
 // btPosition is one open simulated position.
@@ -245,11 +263,13 @@ type btPosition struct {
 	qty   float64
 }
 
-// pendingEntry is a passive limit order resting at the signal price (#5).
+// pendingEntry is a passive limit order resting at the signal price (#5, and P2.3's chase
+// variant — atr is only used by the latter, to test the chase-to-market distance rule).
 type pendingEntry struct {
 	sig     Signal
 	cf      *cfTrack
 	expires int64
+	atr     float64
 }
 
 // RunBacktest replays historical 1-minute bars through the SAME detectors the live engine
@@ -533,7 +553,8 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 		cumVol := map[string]float64{} // per-symbol cumulative volume
 		openPos := map[string]*btPosition{}
 		cfOpen := map[string][]*cfTrack{}   // unresolved counterfactuals (dataset mode)
-		pendings := map[string]*pendingEntry{} // resting passive limits (#5)
+		pendings := map[string]*pendingEntry{}      // resting passive limits (#5)
+		chasePendings := map[string]*pendingEntry{} // resting chase-execution limits (P2.3)
 		dayStart := len(res.Trades)
 		dayHalted := false
 		dayState := 0 // #4: 1 = risk-on, 0 = risk-off
@@ -561,6 +582,35 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 			dayTracker.OnRealized(pnl, time.Unix(exitTime, 0))
 			if _, halted := dayTracker.Realized(time.Unix(exitTime, 0)); halted {
 				dayHalted = true
+			}
+		}
+
+		// fillPending opens a position from a resting chase-execution order (P2.3) at
+		// entryPx, re-checking slots/loss-cap/throttle at fill time exactly like #5.
+		fillPending := func(pe *pendingEntry, entryPx float64, b Bar, filled *int) {
+			if _, held := openPos[pe.sig.Symbol]; held || dayTracker.CanEnter(len(openPos), time.Unix(b.Time, 0)) != nil {
+				res.SkippedRisk++
+				return
+			}
+			qty := cfg.Limits.Size(pe.sig.Suggested.Entry, pe.sig.Suggested.Stop)
+			if cfg.Throttle {
+				if ts := throttleStats[pe.sig.Strategy]; ts != nil && ts.halves() {
+					qty = float64(int(qty / 2))
+					res.ThrottledHalf++
+				}
+			}
+			if qty < 1 {
+				res.SkippedSize++
+				return
+			}
+			p := &btPosition{sig: pe.sig, entry: entryPx, qty: qty}
+			openPos[pe.sig.Symbol] = p
+			*filled++
+			if pe.cf != nil {
+				pe.cf.traded = true
+			}
+			if b.Low <= pe.sig.Suggested.Stop {
+				closePos(p, pe.sig.Suggested.Stop, b.Time, "stop", true)
 			}
 		}
 
@@ -649,6 +699,24 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 					} else {
 						res.SkippedRisk++
 					}
+				}
+			}
+
+			// 1c) Chase-execution orders (P2.3, execution model v2): same passive-fill
+			// behavior as #5, but at expiry — instead of always missing — chase to market
+			// if price is still within chaseATRMult*ATR of the original entry.
+			if pe := chasePendings[sym]; pe != nil && b.Time > pe.sig.Time {
+				switch {
+				case b.Time > pe.expires:
+					delete(chasePendings, sym)
+					if math.Abs(b.Close-pe.sig.Suggested.Entry) <= chaseATRMult*pe.atr {
+						fillPending(pe, b.Close*(1+cfg.SlippageBps/10000), b, &res.ChaseMarketFills)
+					} else {
+						res.ChaseMisses++
+					}
+				case b.Low <= pe.sig.Suggested.Entry:
+					delete(chasePendings, sym)
+					fillPending(pe, pe.sig.Suggested.Entry, b, &res.ChasePassiveFills)
 				}
 			}
 
@@ -777,11 +845,21 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 				if pendings[sym] != nil {
 					continue // one working order per symbol
 				}
+				if chasePendings[sym] != nil {
+					continue // one working order per symbol
+				}
 				// #5: passive entry — rest a limit at the signal price instead of paying
 				// the spread; slots/loss-cap are re-checked at fill time.
 				if cfg.PassiveEntry {
 					pendings[sym] = &pendingEntry{sig: *sig, cf: cf, expires: sig.Time + passiveWindowMin*60}
 					res.PassiveAttempts++
+					continue
+				}
+				// P2.3: chase execution — same passive rest, shorter window, chase-to-
+				// market fallback at expiry instead of always missing.
+				if cfg.ChaseExecution {
+					chasePendings[sym] = &pendingEntry{sig: *sig, cf: cf, expires: sig.Time + chaseWindowMin*60, atr: st.ATR}
+					res.ChaseAttempts++
 					continue
 				}
 				if err := dayTracker.CanEnter(len(openPos), time.Unix(b.Time, 0)); err != nil {
@@ -810,6 +888,9 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 
 		// Passive limits still resting at the close expire unfilled.
 		res.PassiveMisses += len(pendings)
+		// Chase-execution limits still resting at the close are misses too (no bar left
+		// to chase into).
+		res.ChaseMisses += len(chasePendings)
 
 		// Safety: close anything still open at its last seen price (thin data days).
 		for _, p := range openPos {
@@ -1027,6 +1108,10 @@ func (r *BTResult) Report() string {
 	if r.PassiveAttempts > 0 {
 		fmt.Fprintf(&b, "Passive entry: %d rested · %d filled (%.0f%%) · %d missed\n",
 			r.PassiveAttempts, r.PassiveFills, float64(r.PassiveFills)/float64(r.PassiveAttempts)*100, r.PassiveMisses)
+	}
+	if r.ChaseAttempts > 0 {
+		fmt.Fprintf(&b, "Chase execution: %d rested · %d filled passively · %d chased to market · %d missed\n",
+			r.ChaseAttempts, r.ChasePassiveFills, r.ChaseMarketFills, r.ChaseMisses)
 	}
 	if r.ThrottledHalf > 0 {
 		fmt.Fprintf(&b, "Sizing throttle: %d entries half-sized\n", r.ThrottledHalf)

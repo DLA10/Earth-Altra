@@ -74,6 +74,7 @@ func main() {
 	predRank := flag.String("predrank", "", "P2.2: rank model's predictions JSONL (LightGBM ranker)")
 	ensembleClfMargin := flag.Float64("ensembleclfmargin", 0.03, "P2.2: minimum clf expected R to pass its leg")
 	ensembleRankQ := flag.Float64("ensemblerankq", 0.70, "P2.2: rank leg must clear this quantile of the strategy's PRIOR-day rank scores")
+	chase := flag.Bool("chase", false, "P2.3: passive limit for 3 minutes, then chase to market if unfilled and price is within 0.1xATR of the entry (mutually exclusive with -passive)")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
 
@@ -123,6 +124,7 @@ func main() {
 		EnsembleAgreement:    *ensemble,
 		EnsembleClfMargin:    *ensembleClfMargin,
 		EnsembleRankQuantile: *ensembleRankQ,
+		ChaseExecution:       *chase,
 	}
 	if *mlpred != "" {
 		preds, err := loadPredictions(*mlpred)
