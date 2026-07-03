@@ -109,6 +109,24 @@ type BTConfig struct {
 	// every published signal's Features, computed from the same-day session bars of its
 	// sector peers. Research-only; off by default so existing runs are unaffected.
 	SectorLeadLag bool
+
+	// ---- P2.2: ensemble agreement filter (RESEARCH_BACKLOG #10, simplified — this is ----
+	// ---- an agreement filter over 3 model families, NOT formal conformal prediction). ----
+
+	// PredictionsReg/Clf/Rank are three parallel walk-forward prediction maps (same
+	// "strategy|symbol|unixtime" keying as Predictions), one per model family, used only
+	// when EnsembleAgreement is on. All three must have a score for a signal before the
+	// gate applies; missing any one is warmup pass-through (ungated), same as Predictions.
+	PredictionsReg  map[string]float64
+	PredictionsClf  map[string]float64
+	PredictionsRank map[string]float64
+	// EnsembleAgreement: accept a signal only when PredictionsClf >= EnsembleClfMargin AND
+	// PredictionsRank clears its causal per-strategy EnsembleRankQuantile (computed from
+	// PRIOR days only, same mechanism as MLTopQuantile) AND PredictionsReg >= 0. Mutually
+	// exclusive with MLGate/Predictions in practice (whichever the caller sets up).
+	EnsembleAgreement    bool
+	EnsembleClfMargin    float64 // default 0.03
+	EnsembleRankQuantile float64 // default 0.70
 }
 
 // Pre-registered Tier-1 constants — fixed before any experiment ran; never swept.
@@ -354,7 +372,7 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	}
 	// The conditioning mechanisms learn from resolved counterfactual rows, so any of
 	// them being on requires counterfactual tracking.
-	trackCF := dataset != nil || gate != nil || len(cfg.Predictions) > 0 ||
+	trackCF := dataset != nil || gate != nil || len(cfg.Predictions) > 0 || cfg.EnsembleAgreement ||
 		cfg.TODFilter || cfg.RegimeRouter || cfg.Throttle
 
 	// #2: causal per-strategy score thresholds — for each day, the q-quantile of that
@@ -362,6 +380,22 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	var topqThreshold map[string]map[string]float64 // strategy -> day -> threshold
 	if cfg.MLTopQuantile > 0 && len(cfg.Predictions) > 0 {
 		topqThreshold = buildTopqThresholds(cfg.Predictions, cfg.MLTopQuantile, loc)
+	}
+
+	// P2.2: same causal-quantile mechanism, applied to the rank leg of the ensemble
+	// agreement filter.
+	ensembleClfMargin := cfg.EnsembleClfMargin
+	if ensembleClfMargin == 0 {
+		ensembleClfMargin = 0.03
+	}
+	ensembleRankQuantile := cfg.EnsembleRankQuantile
+	if ensembleRankQuantile == 0 {
+		ensembleRankQuantile = 0.70
+	}
+	var ensembleRankThreshold map[string]map[string]float64
+	if cfg.EnsembleAgreement {
+		res.GateOn = true
+		ensembleRankThreshold = buildTopqThresholds(cfg.PredictionsRank, ensembleRankQuantile, loc)
 	}
 
 	// Online conditioning statistics (#3, #4, #6), fed by writeRow as outcomes resolve.
@@ -685,6 +719,21 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 						} else {
 							gateApplied = true
 							gateOK = v >= margin
+						}
+					}
+				} else if cfg.EnsembleAgreement {
+					// P2.2: all three legs must agree. Any leg missing a score, or the rank
+					// leg's causal threshold not yet established for this (strategy, day),
+					// is warmup pass-through — same semantics as the single-model gates.
+					predKey := sig.Strategy + "|" + sym + "|" + strconv.FormatInt(sig.Time, 10)
+					clfV, clfOK := cfg.PredictionsClf[predKey]
+					rankV, rankOK := cfg.PredictionsRank[predKey]
+					regV, regOK := cfg.PredictionsReg[predKey]
+					if clfOK && rankOK && regOK {
+						if thr, ok := ensembleRankThreshold[sig.Strategy][day]; ok {
+							gateApplied = true
+							predR = clfV
+							gateOK = clfV >= ensembleClfMargin && rankV >= thr && regV >= 0
 						}
 					}
 				}

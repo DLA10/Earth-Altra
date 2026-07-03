@@ -68,6 +68,12 @@ func main() {
 	noCache := flag.Bool("nocache", false, "bypass the on-disk bar cache")
 	chunkDays := flag.Int("chunkdays", 0, "fetch the minute-bar window in consecutive chunks of this many calendar days (avoids Alpaca rate-limit stalls on long windows); 0 = single fetch (default)")
 	sectorLag := flag.Bool("sectorlag", false, "P2.1: merge sector_ret_15m/peer_gap_15m into every signal's features (research-only, off by default)")
+	ensemble := flag.Bool("ensemble", false, "P2.2: gate entries by 3-model agreement (needs -predreg/-predclf/-predrank); mutually exclusive with -mlpred/-mlgate")
+	predReg := flag.String("predreg", "", "P2.2: reg model's predictions JSONL (LightGBM regressor)")
+	predClf := flag.String("predclf", "", "P2.2: clf model's predictions JSONL (LightGBM classifier)")
+	predRank := flag.String("predrank", "", "P2.2: rank model's predictions JSONL (LightGBM ranker)")
+	ensembleClfMargin := flag.Float64("ensembleclfmargin", 0.03, "P2.2: minimum clf expected R to pass its leg")
+	ensembleRankQ := flag.Float64("ensemblerankq", 0.70, "P2.2: rank leg must clear this quantile of the strategy's PRIOR-day rank scores")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
 
@@ -114,6 +120,9 @@ func main() {
 		Throttle:       *throttle,
 		MinEntryMinute: *minEntry,
 		SectorLeadLag:  *sectorLag,
+		EnsembleAgreement:    *ensemble,
+		EnsembleClfMargin:    *ensembleClfMargin,
+		EnsembleRankQuantile: *ensembleRankQ,
 	}
 	if *mlpred != "" {
 		preds, err := loadPredictions(*mlpred)
@@ -122,6 +131,22 @@ func main() {
 		}
 		btCfg.Predictions = preds
 		log.Printf("loaded %d external predictions from %s", len(preds), *mlpred)
+	}
+	if *ensemble {
+		reg, err := loadPredictions(*predReg)
+		if err != nil {
+			log.Fatalf("predreg: %v", err)
+		}
+		clf, err := loadPredictions(*predClf)
+		if err != nil {
+			log.Fatalf("predclf: %v", err)
+		}
+		rank, err := loadPredictions(*predRank)
+		if err != nil {
+			log.Fatalf("predrank: %v", err)
+		}
+		btCfg.PredictionsReg, btCfg.PredictionsClf, btCfg.PredictionsRank = reg, clf, rank
+		log.Printf("ensemble: loaded reg=%d clf=%d rank=%d predictions", len(reg), len(clf), len(rank))
 	}
 	if *strats != "" {
 		btCfg.OnlyStrats = strings.Split(*strats, ",")
