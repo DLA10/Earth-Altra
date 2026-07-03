@@ -66,6 +66,7 @@ func main() {
 	minEntry := flag.Int("minentry", 0, "block entries before this session minute (65 = no entries before 10:35 ET)")
 	open30 := flag.Bool("open30", false, "analysis mode: does the first-30-min move predict the rest of the day? (no backtest)")
 	noCache := flag.Bool("nocache", false, "bypass the on-disk bar cache")
+	chunkDays := flag.Int("chunkdays", 0, "fetch the minute-bar window in consecutive chunks of this many calendar days (avoids Alpaca rate-limit stalls on long windows); 0 = single fetch (default)")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
 
@@ -76,7 +77,7 @@ func main() {
 	}
 	log.Printf("universe: %d tradable symbols + %d context (%s)", len(uni.Symbols()), len(uni.Context()), strings.Join(uni.Context(), ","))
 
-	data := loadBars(uni, *days, *noCache)
+	data := loadBars(uni, *days, *chunkDays, *noCache)
 
 	if *open30 {
 		analyzeOpen30(uni, data.Minute)
@@ -266,10 +267,18 @@ func prevDay(days []string, day string) string {
 	return prev
 }
 
-// loadBars fetches (or loads from cache) the daily + minute bars for the window.
-func loadBars(uni *signals.Universe, days int, noCache bool) btData {
+// loadBars fetches (or loads from cache) the daily + minute bars for the window. When
+// chunkDays > 0 the minute-bar window is split into consecutive chunkDays-day pieces —
+// each fetched and cached independently — instead of one large request, since a single
+// ~357-day fetch stalls on Alpaca rate limits.
+func loadBars(uni *signals.Universe, days, chunkDays int, noCache bool) btData {
 	end := time.Now()
 	start := end.AddDate(0, 0, -(days*7/5 + 5))
+
+	if chunkDays > 0 {
+		return loadBarsChunked(uni, days, chunkDays, start, end, noCache)
+	}
+
 	cachePath := filepath.Join("data", "btcache",
 		fmt.Sprintf("%s_%s_%dsyms.gob", start.Format("20060102"), end.Format("20060102"), len(uni.All())))
 
@@ -318,6 +327,87 @@ func loadBars(uni *signals.Universe, days int, noCache bool) btData {
 			}
 		}
 	}
+	return data
+}
+
+// loadBarsChunked is loadBars' chunked-fetch path (see loadBars doc). Each chunk's cache
+// file uses the same "<start>_<end>_<n>syms.gob" naming as the unchunked path — the chunk
+// bounds make the name unique — so chunk caches never collide with the whole-window cache.
+func loadBarsChunked(uni *signals.Universe, days, chunkDays int, start, end time.Time, noCache bool) btData {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	client := alpaca.New(cfg)
+	symbols := uni.All()
+
+	log.Printf("fetching daily bars (%d symbols, ~%d days of context)...", len(symbols), days+30)
+	daily, err := client.GetMultiDailyBars(symbols, days+30)
+	if err != nil {
+		log.Fatalf("daily bars: %v", err)
+	}
+
+	minute := map[string][]signals.Bar{}
+	chunkN := 0
+	for cs := start; cs.Before(end); cs = cs.AddDate(0, 0, chunkDays) {
+		ce := cs.AddDate(0, 0, chunkDays)
+		if ce.After(end) {
+			ce = end
+		}
+		chunkN++
+		chunkPath := filepath.Join("data", "btcache",
+			fmt.Sprintf("%s_%s_%dsyms.gob", cs.Format("20060102"), ce.Format("20060102"), len(symbols)))
+
+		var chunkBars map[string][]signals.Bar
+		if !noCache {
+			if f, err := os.Open(chunkPath); err == nil {
+				var m map[string][]signals.Bar
+				decErr := gob.NewDecoder(f).Decode(&m)
+				f.Close()
+				if decErr == nil {
+					chunkBars = m
+					log.Printf("chunk %d/%s→%s: loaded from cache %s", chunkN, cs.Format("2006-01-02"), ce.Format("2006-01-02"), chunkPath)
+				}
+			}
+		}
+		if chunkBars == nil {
+			log.Printf("chunk %d: fetching %s → %s...", chunkN, cs.Format("2006-01-02"), ce.Format("2006-01-02"))
+			raw, err := client.GetMultiIntradayBars(symbols, cs, ce)
+			if err != nil {
+				log.Fatalf("minute bars chunk %s-%s: %v", cs.Format("2006-01-02"), ce.Format("2006-01-02"), err)
+			}
+			chunkBars = toBars(raw)
+			if !noCache {
+				_ = os.MkdirAll(filepath.Dir(chunkPath), 0o755)
+				if f, err := os.Create(chunkPath); err == nil {
+					if gob.NewEncoder(f).Encode(&chunkBars) == nil {
+						log.Printf("chunk %d: cached to %s", chunkN, chunkPath)
+					}
+					f.Close()
+				}
+			}
+		}
+
+		var n int
+		for sym, bs := range chunkBars {
+			minute[sym] = append(minute[sym], bs...)
+			n += len(bs)
+		}
+		log.Printf("chunk %d: %d bars across %d symbols", chunkN, n, len(chunkBars))
+	}
+
+	for sym := range minute {
+		bs := minute[sym]
+		sort.Slice(bs, func(i, j int) bool { return bs[i].Time < bs[j].Time })
+		minute[sym] = bs
+	}
+
+	data := btData{Minute: minute, Daily: toBars(daily)}
+	var n int
+	for _, bs := range data.Minute {
+		n += len(bs)
+	}
+	log.Printf("loaded %d minute bars across %d symbols (%d chunks of %d days)", n, len(data.Minute), chunkN, chunkDays)
 	return data
 }
 
