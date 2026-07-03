@@ -177,6 +177,23 @@ the operator + verifier to judge.
   that runs `research_loop.py` at 18:30 ET weekdays in non-interactive mode (proposals
   parked as pending; the human approves via a later interactive run or by reviewing
   `proposals_*.json`). Document in README.
+- **P2.5 Bounded auto-apply ("machine gate for safe knobs")**: make the improvement loop
+  self-sufficient WITHOUT unbounded self-modification.
+  1. `backend/data/overrides.json`: whitelisted runtime knobs only —
+     `trail_pct` (clamped 1.0–3.0), `judge_min_conf` (0.5–0.8), `daily_loss_cap`
+     (may only DECREASE from the env value), `strategy_enabled` map (bool per strategy).
+     Backend loads at boot + hot-reloads on a 2-min ticker (same pattern as the
+     universe reloader); every applied value is clamped in code and logged.
+  2. `research_loop.py --auto`: proposals whose `target` matches a whitelisted knob go
+     to a new VALIDATE node — run the Go backtester over the cached 6-month window with
+     the proposed value (via existing flags where available) and require it to beat the
+     incumbent's total P&L on the same window; pass → write to overrides.json + append
+     `{status:"auto_applied", validation:{...}}` to approved_changes.jsonl; fail or
+     non-whitelisted → park as pending for the human, as today.
+  3. Hard rules: risk caps may never loosen automatically; pre-registered eval constants
+     are NOT whitelisted; every auto-application is reversible by deleting the override.
+  Report which knobs were wired and show one full validate-pass and one validate-fail
+  example from a dry run.
 
 After Phase 2 reporting, the verifier (Fable session) audits everything before any
 result is promoted.
