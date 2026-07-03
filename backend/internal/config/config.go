@@ -88,6 +88,10 @@ type Config struct {
 	// QuantDailyLossCap halts new signal entries once the day's approximate realized
 	// P&L reaches -cap (USD).
 	QuantDailyLossCap float64
+	// QuantStrategistModel is the pre-market Strategist agent's model ("" uses default).
+	QuantStrategistModel string
+	// QuantStrategist enables the pre-market posture/allocation agent.
+	QuantStrategist bool
 }
 
 const (
@@ -135,6 +139,8 @@ func Load() (*Config, error) {
 		QuantSignalsLive:    envBool("QUANT_SIGNALS_LIVE", true),
 		QuantJudgeModel:     envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
 		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
+		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
+		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
 	}
 
 	c.QuantUniverseCandidates = []string{

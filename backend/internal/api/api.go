@@ -64,6 +64,9 @@ type Server struct {
 	// Nil-safe / disabled-safe; never on the order path.
 	Gemini *gemini.Client
 
+	// Evals returns the current eval scoreboard (nil-safe; set by main).
+	Evals func() interface{}
+
 	// movers-news badge cache (Alpaca-only, cheap): short TTL keeps the board snappy.
 	mnMu   sync.Mutex
 	mnResp *MoversNews
@@ -218,6 +221,15 @@ func (s *Server) Routes(r chi.Router) {
 
 	// Quant pipeline (the AI paper-trading team): full report for the Paper·Claude page.
 	r.Get("/api/quant", s.quantReport)
+
+	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
+	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {
+		if s.Evals == nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.Evals())
+	})
 }
 
 func (s *Server) symbols() []string {

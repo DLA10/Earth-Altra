@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"live-optimus/backend/internal/risk"
@@ -25,14 +26,19 @@ import (
 // the two can never oversubscribe the budget. Paper-only by construction: the broker
 // holds paper keys; there is no code path from here to the live account.
 type SignalTrader struct {
-	eng      *Engine        // quant engine (allocator, decision log, candle prices, universe posture)
-	mgr      *Manager       // position lifecycle (entry, stop floor, Agent 3, flatten)
-	sigs     *signals.Engine // the live signal engine (TOD gate lives here)
-	judge    *SignalJudge   // LLM red-flag reviewer (nil-safe: skipped when disabled)
-	day      *risk.Day      // daily loss-cap tracker (approximate, halt-only)
-	appCtx   context.Context
-	loc      *time.Location
-	enabled  bool
+	eng     *Engine         // quant engine (allocator, decision log, candle prices, universe posture)
+	mgr     *Manager        // position lifecycle (entry, stop floor, Agent 3, flatten)
+	sigs    *signals.Engine // the live signal engine (TOD gate lives here)
+	judge   *SignalJudge    // LLM red-flag reviewer (nil-safe: skipped when disabled)
+	day     *risk.Day       // daily loss-cap tracker (approximate, halt-only)
+	appCtx  context.Context
+	loc     *time.Location
+	enabled bool
+
+	// Demoted, when set, reports whether the eval scoreboard has benched a strategy
+	// (negative rolling expectancy or CUSUM alarm) — benched strategies keep journaling
+	// but may not trade.
+	Demoted func(strategy string) bool
 }
 
 // NewSignalTrader wires the bridge. limits supplies the daily loss cap; the allocator
@@ -76,6 +82,11 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		skip("time-of-day bucket has proven negative expectancy")
 		return
 	}
+	// 1b) Scoreboard demotion (evals): benched strategies journal but don't trade.
+	if t.Demoted != nil && t.Demoted(sig.Strategy) {
+		skip("strategy demoted by the eval scoreboard")
+		return
+	}
 	// 2) Session guard: nothing fresh after 15:30 ET (the manager flattens at 15:55).
 	now := time.Now().In(t.loc)
 	if now.Hour() > 15 || (now.Hour() == 15 && now.Minute() >= 30) {
@@ -117,6 +128,11 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		}
 		conf = dec.Confidence
 	}
+	// Cautious posture (Strategist): demand higher conviction before committing.
+	if t.eng.universe != nil && strings.EqualFold(t.eng.universe.Regime().Posture, "cautious") && conf < 0.65 {
+		skip(fmt.Sprintf("cautious posture requires conviction ≥ 0.65 (got %.2f)", conf))
+		return
+	}
 
 	// 7) Deterministic sizing + funding (conviction picks full vs half slice).
 	size := t.eng.alloc.Size(conf)
@@ -157,11 +173,12 @@ func (t *SignalTrader) judgeSnapshot(sig signals.Signal) string {
 		}
 	}
 	snap := map[string]interface{}{
-		"strategy": sig.Strategy,
-		"symbol":   sig.Symbol,
-		"sector":   sig.Sector,
-		"now_et":   time.Now().In(t.loc).Format("15:04"),
-		"price":    sig.Price,
+		"signal_id": sig.ID, // joins the judge's decision to its counterfactual outcome (evals)
+		"strategy":  sig.Strategy,
+		"symbol":    sig.Symbol,
+		"sector":    sig.Sector,
+		"now_et":    time.Now().In(t.loc).Format("15:04"),
+		"price":     sig.Price,
 		"bracket": map[string]interface{}{
 			"entry": sig.Suggested.Entry, "stop": sig.Suggested.Stop, "target": sig.Suggested.Target,
 			"risk_pct": round2(riskPct), "reward_risk": round2(rr),

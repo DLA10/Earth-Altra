@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // bundle the tz database so America/New_York works on Windows
@@ -25,6 +26,7 @@ import (
 	"live-optimus/backend/internal/candles"
 	"live-optimus/backend/internal/config"
 	"live-optimus/backend/internal/dipwatch"
+	"live-optimus/backend/internal/evals"
 	"live-optimus/backend/internal/execsym"
 	"live-optimus/backend/internal/flow"
 	"live-optimus/backend/internal/gemini"
@@ -211,7 +213,8 @@ func main() {
 	// rules as before — only the symbol set was broadened. Never touches the order/stream path.
 	dw := dipwatch.New(cfg.TelegramBotToken, cfg.TelegramChatID, watchMgr.All, engine, client)
 
-	var quantEngine *quant.Engine // exposed to the API after srv is built
+	var quantEngine *quant.Engine        // exposed to the API after srv is built
+	var evalsFn func() interface{}       // eval scoreboard accessor for /api/evals
 	// AI quant pipeline — Agent 2 (entry decision) in SHADOW mode. On each confirmed dip, if the
 	// symbol is in today's curated universe (backend/data/daily_universe.json), Opus decides
 	// buy/no_buy; the decision is logged (backend/data/decisions/) and its label is appended to
@@ -321,20 +324,78 @@ func main() {
 		// Agent 3 exits, EOD flatten) → Claude PAPER account. Shares the allocator with
 		// the dip pipeline so the two can never oversubscribe the $8k budget. The
 		// dipwatch Telegram flow is untouched.
+		// ---- Eval scoreboard (QUANT_VISION §5): rolling strategy expectancy, CUSUM ----
+		// watchdog, judge calibration; recomputed every 10 min, persisted, served at
+		// /api/evals, and enforced as strategy demotion in the signal trader.
+		var sbMu sync.RWMutex
+		var scoreboard *evals.Scoreboard
+		refreshEvals := func() {
+			if sb, err := evals.Compute("data", 20, etz); err == nil {
+				sb.Save("data")
+				sbMu.Lock()
+				scoreboard = sb
+				sbMu.Unlock()
+			}
+		}
+		refreshEvals()
+		go func() {
+			t := time.NewTicker(10 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					refreshEvals()
+				}
+			}
+		}()
+		evalsFn = func() interface{} {
+			sbMu.RLock()
+			defer sbMu.RUnlock()
+			if scoreboard == nil {
+				return map[string]interface{}{"enabled": false}
+			}
+			return scoreboard
+		}
+
 		if sigEngine != nil && qBroker.Enabled() {
 			judge := quant.NewSignalJudge(qAnth, cfg.QuantJudgeModel)
 			limits := risk.Defaults()
 			limits.DailyLossCapUSD = cfg.QuantDailyLossCap
 			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive)
+			trader.Demoted = func(strategy string) bool {
+				sbMu.RLock()
+				defer sbMu.RUnlock()
+				return scoreboard != nil && scoreboard.IsDemoted(strategy)
+			}
 			sigEngine.SetOnSignal(trader.OnSignal)
 			if cfg.QuantSignalsLive {
-				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate active",
+				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate + scoreboard demotion active",
 					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap)
 			} else {
 				log.Printf("signal-trader: disabled (QUANT_SIGNALS_LIVE=false) — shadow journaling only")
 			}
 		} else if sigEngine != nil {
 			log.Printf("signal-trader: no paper broker keys — shadow journaling only")
+		}
+
+		// ---- Strategist agent: pre-market posture + allocation → daily_universe.json ----
+		if cfg.QuantStrategist {
+			marketFn := func() (quant.MarketState, error) {
+				bars, err := client.GetMultiDailyBars([]string{"SPY", "QQQ"}, 30)
+				if err != nil {
+					return quant.MarketState{}, err
+				}
+				return marketStateFrom(bars), nil
+			}
+			strategist := quant.NewStrategist(qAnth, cfg.QuantStrategistModel, "data", etz, qLog, marketFn, func() {
+				if qUniverse.Reload() == nil {
+					qAlloc.Configure(qUniverse.Allocation())
+				}
+			})
+			go strategist.RunDaily(ctx)
+			log.Printf("strategist: armed (weekdays 08:50-09:25 ET, model=%s, llm=%v)", cfg.QuantStrategistModel, qAnth.Enabled())
 		}
 	}
 
@@ -369,6 +430,7 @@ func main() {
 	h.EnsureLiveFn = srv.EnsureLive
 
 	srv.Quant = quantEngine
+	srv.Evals = evalsFn
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -633,6 +695,52 @@ func seedSignalEngine(client *alpaca.Client, se *signals.Engine, symbols []strin
 		se.SeedBars(sym, sb)
 	}
 	log.Printf("signals: seeded %d daily contexts, %d intraday sessions", len(daily), len(intra))
+}
+
+// marketStateFrom derives the Strategist's deterministic pre-market picture from
+// SPY/QQQ daily bars (trend, 20d-MA state, ATR% vol proxy).
+func marketStateFrom(bars map[string][]alpaca.HistBar) quant.MarketState {
+	ms := quant.MarketState{}
+	stats := func(bs []alpaca.HistBar) (pct5 float64, above20 bool, atrPct, prevDay float64) {
+		n := len(bs)
+		if n < 21 {
+			return
+		}
+		last := bs[n-1].Close
+		if p := bs[n-6].Close; p > 0 {
+			pct5 = (last - p) / p * 100
+		}
+		var sma float64
+		for _, b := range bs[n-20:] {
+			sma += b.Close
+		}
+		above20 = last > sma/20
+		var atr float64
+		for i := n - 14; i < n; i++ {
+			tr := bs[i].High - bs[i].Low
+			if x := bs[i].High - bs[i-1].Close; x > tr {
+				tr = x
+			}
+			if x := bs[i-1].Close - bs[i].Low; x > tr {
+				tr = x
+			}
+			atr += tr
+		}
+		if last > 0 {
+			atrPct = atr / 14 / last * 100
+		}
+		if p := bs[n-2].Close; p > 0 {
+			prevDay = (last - p) / p * 100
+		}
+		return
+	}
+	if bs := bars["SPY"]; len(bs) > 0 {
+		ms.SpyPct5d, ms.SpyAbove20d, _, _ = stats(bs)
+	}
+	if bs := bars["QQQ"]; len(bs) > 0 {
+		ms.QqqPct5d, ms.QqqAbove20d, ms.QqqATRPct, ms.PrevDayQqq = stats(bs)
+	}
+	return ms
 }
 
 // avgLastF averages the last n values of a series.
