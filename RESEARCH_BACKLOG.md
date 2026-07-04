@@ -18,7 +18,7 @@
 | 12 | Temporal CNN | ⏳ future (needs 20k+ rows) |
 | 13 | Changepoint watchdog | ✅ **SHIPPED** (CUSUM w/ alarm decay in `internal/evals`; benched dip_bounce + orb_breakout on its first live day) |
 | 14 | Intraday pairs | ⏳ future (needs operator decision on shorting) |
-| 15 | LightGBM clf gate (margin 0.03) | ✅ **PASSED THE FULL PROMOTION BAR** (2026-07-04) — the only mechanism ever to do so. Walk-forward, zero lookahead, positive accepted-vs-rejected spread AND positive dollars on all three windows: 12-mo −$718→**+$329**, Jan–Jul −$219→**+$302**, Apr–Jul holdout +$871→**+$1,512** (drawdown lower). NOT yet live: needs nightly-retrain + live-inference infrastructure (separate build, operator go required) |
+| 15 | LightGBM clf gate (margin 0.03) | ✅ **SHIPPED LIVE 2026-07-04** (operator go) — the only mechanism ever to pass the full promotion bar. Walk-forward, zero lookahead, positive accepted-vs-rejected spread AND positive dollars on all three windows: 12-mo −$718→**+$329**, Jan–Jul −$219→**+$302**, Apr–Jul holdout +$871→**+$1,512** (drawdown lower). Live stack: `ml/train_live.py` nightly (17:05 ET + boot catch-up) → per-strategy models + parity file → Go in-process scoring (`quant/clfgate.go`, leaves) with load-time Python/Go parity verification; fail-open at every failure point; every verdict logged with `signal_id` for live spread measurement. Kill switch `QUANT_CLF_GATE=false` |
 
 > Rules of the queue (unchanged from QUANT_VISION §5): every idea states its economic
 > *why* before its model, is validated walk-forward through the existing harness

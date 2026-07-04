@@ -88,6 +88,14 @@ type Config struct {
 	// QuantDailyLossCap halts new signal entries once the day's approximate realized
 	// P&L reaches -cap (USD).
 	QuantDailyLossCap float64
+	// QuantClfGate enables the promoted ML entry gate (RESEARCH_BACKLOG #15): nightly-
+	// trained per-strategy LightGBM classifiers score every signal's expected R and the
+	// trader rejects entries below the pre-registered 0.03 margin. Fail-open: without
+	// fresh models the desk trades exactly as before. Paper-side only.
+	QuantClfGate bool
+	// QuantRetrain auto-runs ml/train_live.py each weekday ~17:05 ET (plus a boot
+	// catch-up when models are stale) so the gate walks forward with the live journal.
+	QuantRetrain bool
 	// QuantTODGate: when true the signal trader ENFORCES the learned time-of-day gate
 	// (skips entries in buckets with proven negative expectancy). Default FALSE
 	// (shadow-only) since the 2026-07 re-validation: cumulative buckets fail across a
@@ -150,6 +158,8 @@ func Load() (*Config, error) {
 		QuantSignalsLive:    envBool("QUANT_SIGNALS_LIVE", true),
 		QuantJudgeModel:     envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
 		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
+		QuantClfGate:        envBool("QUANT_CLF_GATE", true),
+		QuantRetrain:        envBool("QUANT_RETRAIN", true),
 		QuantTODGate:        envBool("QUANT_TOD_GATE", false),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),

@@ -13,6 +13,7 @@ require (
 
 require (
 	cloud.google.com/go v0.118.0 // indirect
+	github.com/dmitryikh/leaves v0.0.0-20230708180554-25d19a787328 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.3.0 // indirect

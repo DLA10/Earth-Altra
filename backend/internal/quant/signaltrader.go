@@ -41,6 +41,11 @@ type SignalTrader struct {
 	// (negative rolling expectancy or CUSUM alarm) — benched strategies keep journaling
 	// but may not trade.
 	Demoted func(strategy string) bool
+
+	// Clf, when set, is the promoted ML entry gate (RESEARCH_BACKLOG #15): per-strategy
+	// LightGBM classifiers scoring expected R from the signal's features. Nil-safe and
+	// fail-open — unscored signals pass through, matching the validated semantics.
+	Clf *ClfGate
 }
 
 // NewSignalTrader wires the bridge. limits supplies the daily loss cap; the allocator
@@ -91,6 +96,28 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 	if t.Demoted != nil && t.Demoted(sig.Strategy) {
 		skip("strategy demoted by the eval scoreboard")
 		return
+	}
+	// 1c) The promoted ML entry gate (#15): expected R from the strategy's LightGBM
+	// classifier; entries below the pre-registered margin are rejected. Every scored
+	// verdict is logged with the signal id so the eval scoreboard can later measure the
+	// gate's live accepted-vs-rejected spread. Unscored strategies pass through.
+	if t.Clf != nil && t.Clf.Ready() {
+		if ev, scored := t.Clf.Score(sig); scored {
+			verdict := "accept"
+			if ev < t.Clf.Margin() {
+				verdict = "reject"
+			}
+			in, _ := json.Marshal(map[string]interface{}{
+				"signal_id": sig.ID, "strategy": sig.Strategy, "symbol": sym,
+				"ev": ev, "margin": t.Clf.Margin(), "model_day": t.Clf.LastDay(),
+			})
+			t.eng.logRec(LogRecord{Agent: "signal_clf", Event: "decision", Symbol: sym,
+				Input: json.RawMessage(in), Note: verdict})
+			if verdict == "reject" {
+				skip(fmt.Sprintf("clf gate: EV %+.3f below margin %.2f", ev, t.Clf.Margin()))
+				return
+			}
+		}
 	}
 	// 2) Session guard: nothing fresh after 15:30 ET (the manager flattens at 15:55).
 	now := time.Now().In(t.loc)

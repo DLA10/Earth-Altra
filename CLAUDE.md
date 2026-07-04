@@ -217,9 +217,13 @@ START-Live-Optimus.bat      one-click Windows launcher
   default** since the 2026-07 re-validation (its edge didn't survive a regime change —
   RESEARCH_BACKLOG #3); `QUANT_TOD_GATE=true` re-enforces it. The same detectors power
   `cmd/backtest`. Execution: `quant.SignalTrader` bridges published signals to the PAPER
-  broker — LLM entry judge (`signaljudge.go`, red-flag veto + conviction sizing) →
-  shared allocator → Manager (trailing-stop floor, Agent 3 exits, EOD flatten) — gated
-  by `QUANT_SIGNALS_LIVE`, scoreboard demotion, and the daily loss cap.
+  broker — **ML entry gate** (`quant/clfgate.go`: per-strategy LightGBM classifiers
+  trained nightly by `ml/train_live.py`, scored in-process via `leaves` with a load-time
+  Python/Go parity check; rejects expected R < 0.03, fail-open without fresh models —
+  the promoted RESEARCH_BACKLOG #15 mechanism) → LLM entry judge (`signaljudge.go`,
+  red-flag veto + conviction sizing) → shared allocator → Manager (trailing-stop floor,
+  Agent 3 exits, EOD flatten) — gated by `QUANT_SIGNALS_LIVE`, scoreboard demotion, and
+  the daily loss cap.
 
 - **`risk`** — deterministic guardrails shared by the backtester and (future) live-paper
   signal execution: daily loss cap, per-trade risk / notional sizing, concurrency cap,
@@ -382,6 +386,8 @@ chart's single-symbol subscription.
 | `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge model |
 | `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries once day P&L ≈ −cap |
 | `QUANT_TOD_GATE` | `false` | Enforce the time-of-day gate (default shadow-only: journals verdicts, blocks nothing) |
+| `QUANT_CLF_GATE` | `true` | ML entry gate: nightly LightGBM classifiers reject entries with expected R < 0.03 (fail-open without fresh models) |
+| `QUANT_RETRAIN` | `true` | Auto-run `ml/train_live.py` weekdays ~17:05 ET (+ boot catch-up) to refresh the gate models |
 | `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | `localhost:11434` / `gemma2:2b` | Agent 4 sentiment (local) |
 
 Backfill always loads the full current session day per symbol (no bar-count knob).

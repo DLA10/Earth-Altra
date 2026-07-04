@@ -381,11 +381,20 @@ func main() {
 			return scoreboard
 		}
 
+		// The promoted ML entry gate (RESEARCH_BACKLOG #15): per-strategy LightGBM
+		// classifiers trained nightly by ml/train_live.py, scored in-process via leaves
+		// with a load-time parity check. Fail-open everywhere: no model → no gating.
+		var clfGate *quant.ClfGate
+		if sigEngine != nil && cfg.QuantClfGate {
+			clfGate = quant.NewClfGate("data/models")
+		}
+
 		if sigEngine != nil && qBroker.Enabled() {
 			judge := quant.NewSignalJudge(qAnth, cfg.QuantJudgeModel)
 			limits := risk.Defaults()
 			limits.DailyLossCapUSD = cfg.QuantDailyLossCap
 			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive, cfg.QuantTODGate)
+			trader.Clf = clfGate
 			trader.Demoted = func(strategy string) bool {
 				sbMu.RLock()
 				defer sbMu.RUnlock()
@@ -422,6 +431,12 @@ func main() {
 			})
 			go strategist.RunDaily(ctx)
 			log.Printf("strategist: armed (weekdays 08:50-09:25 ET, model=%s, llm=%v)", cfg.QuantStrategistModel, qAnth.Enabled())
+		}
+
+		// Nightly retrain: grow the clf training set with today's resolved journal
+		// outcomes and refresh the models after the close (boot catch-up when stale).
+		if sigEngine != nil && cfg.QuantRetrain {
+			go runNightlyRetrain(ctx, clfGate)
 		}
 	}
 
@@ -769,6 +784,64 @@ func runResearchLoop(ctx context.Context) {
 				}
 				log.Printf("research-loop: done | %s", tail)
 			}()
+		}
+	}
+}
+
+// runNightlyRetrain fires ml/train_live.py once per weekday in the 17:05–17:20 ET
+// window (after the close and the 16:10 reviewer, so today's resolved journal outcomes
+// are included), then hot-reloads the clf gate's models. Boot catch-up: if the gate has
+// no fresh models when the process starts (machine was off overnight), it retrains
+// immediately instead of trading a stale week. Best-effort: a failure logs, the gate
+// fails open, and the next window retries. Paper-side only.
+func runNightlyRetrain(ctx context.Context, gate *quant.ClfGate) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	run := func(reason string) {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		log.Printf("clf-retrain: starting (%s)", reason)
+		cmd := exec.CommandContext(cctx, "../ml/.venv/Scripts/python.exe", "../ml/train_live.py",
+			"--data", "data/ml_dataset_12mo.jsonl", "--journal", "data/signals", "--outdir", "data/models")
+		cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
+		out, err := cmd.CombinedOutput()
+		tail := string(out)
+		if len(tail) > 600 {
+			tail = tail[len(tail)-600:]
+		}
+		if err != nil {
+			log.Printf("clf-retrain: failed: %v | %s", err, tail)
+			return
+		}
+		log.Printf("clf-retrain: done | %s", tail)
+		if gate != nil {
+			gate.Reload()
+		}
+	}
+
+	if now := time.Now().In(loc); now.Weekday() >= time.Monday && now.Weekday() <= time.Friday &&
+		gate != nil && !gate.Ready() {
+		run("boot catch-up: no fresh models")
+	}
+
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	lastDay := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().In(loc)
+			day := now.Format("2006-01-02")
+			weekday := now.Weekday() >= time.Monday && now.Weekday() <= time.Friday
+			if !weekday || day == lastDay || now.Hour() != 17 || now.Minute() < 5 || now.Minute() > 20 {
+				continue
+			}
+			lastDay = day
+			go run("nightly window")
 		}
 	}
 }
