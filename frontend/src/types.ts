@@ -317,7 +317,9 @@ export interface IntervalRank {
 
 // --- Quant pipeline (Paper · Claude page) ---
 export interface QuantAllocSnapshot {
-  budget: number;
+  budget: number; // effective (capped at real account equity)
+  configured_max: number; // target budget before the equity cap
+  account_equity: number; // real paper-account equity (0 = unknown)
   free: number;
   deployed: number;
   open_count: number;
@@ -376,6 +378,30 @@ export interface QuantReview {
   suggested_changes: string[];
   consistency_score: number;
 }
+export interface SourceStat {
+  trades: number;
+  wins: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl: number;
+}
+export interface DipScorecard {
+  window_days: number;
+  decisions: number;
+  approved: number;
+  rejected: number;
+  avg_confidence: number;
+  dip: SourceStat;
+  signal: SourceStat;
+  knife_rate: number;
+  verdict: string;
+}
+export interface AgentInfo {
+  name: string;
+  model: string;
+  role: string;
+  live: boolean;
+}
 export interface QuantReport {
   live: boolean;
   universe_size: number;
@@ -383,6 +409,8 @@ export interface QuantReport {
   alloc: QuantAllocSnapshot;
   state: QuantStateT;
   attribution: ExitAttribution;
+  dip_score?: DipScorecard;
+  agents?: AgentInfo[];
   review?: QuantReview;
 }
 export interface QuantResponse {

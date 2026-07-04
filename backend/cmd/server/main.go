@@ -309,6 +309,31 @@ func main() {
 		qEngine.SetExecution(qBroker, qMgr)
 		qEngine.SetContext(ctx)
 
+		// Keep the allocator's budget capped at the paper account's REAL equity, so the
+		// desk never tries to deploy more cash than the account actually holds (e.g. after
+		// a drawdown). Sync once now, before any entry, then every 60s.
+		if qBroker.Enabled() {
+			syncEquity := func() {
+				if ai, err := qBroker.Account(); err == nil && ai.Equity > 0 {
+					qAlloc.SetEquityCeiling(ai.Equity)
+				}
+			}
+			syncEquity()
+			log.Printf("quant: allocator synced to paper account equity (budget capped at real cash)")
+			go func() {
+				t := time.NewTicker(60 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+						syncEquity()
+					}
+				}
+			}()
+		}
+
 		// Restart resilience: re-adopt any position that survived a process restart —
 		// re-attach (or freshly place) its protective stop, re-fund the allocator so the
 		// shared budget can't be oversubscribed, and resume its Agent-3 manage loop.

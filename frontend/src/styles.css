@@ -1031,7 +1031,9 @@ body {
 .quant-agents { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .agent-chip { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
 .agent-name { font-size: 12px; font-weight: 700; }
+.agent-model { font-size: 10px; color: var(--accent, #6ea8fe); font-family: ui-monospace, monospace; margin-top: 1px; }
 .agent-role { font-size: 10px; color: var(--muted); }
+.agent-off { color: var(--muted); font-weight: 400; font-style: italic; }
 .q-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .q-table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .q-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }

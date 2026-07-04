@@ -21,6 +21,7 @@ type managedPos struct {
 	stopOrderID string
 	stopPrice   float64 // current FIXED stop level (0 while on the initial trailing stop)
 	conf        float64
+	source      string // which pipeline opened it: "dip" | "signal" | "rehydrated"
 }
 
 // Manager owns the live position lifecycle: it places the entry, the deterministic trailing-stop
@@ -66,13 +67,14 @@ func (m *Manager) OpenSymbols() []string {
 
 // Open executes an approved dip buy (the dipwatch pipeline's entry point).
 func (m *Manager) Open(ctx context.Context, de DipEvent, conf, dollars float64) {
-	m.OpenPosition(ctx, de.Symbol, conf, dollars)
+	m.OpenPosition(ctx, de.Symbol, conf, dollars, "dip")
 }
 
 // OpenPosition executes an approved buy for any pipeline (dip or signal engine): market
 // entry → confirm fill → place the trailing-stop floor → register → run the Agent 3 loop.
-// Releases the reserved capital on any pre-registration failure.
-func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars float64) {
+// Releases the reserved capital on any pre-registration failure. source tags which
+// pipeline opened the trade ("dip" | "signal") so per-pipeline P&L can be measured.
+func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars float64, source string) {
 	registered := false
 	defer func() {
 		if !registered {
@@ -124,7 +126,7 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 	// Initialize the tracked stop level to the trailing floor's starting point so Agent 3's first
 	// tighten can't accidentally LOOSEN protection (and the exit snapshot shows a real stop).
 	pos := &managedPos{symbol: sym, qty: fq, entryPrice: ap, entryTime: time.Now(), stopOrderID: stopID,
-		stopPrice: round2(ap * (1 - m.trailPct/100)), conf: conf}
+		stopPrice: round2(ap * (1 - m.trailPct/100)), conf: conf, source: source}
 	m.mu.Lock()
 	m.open[sym] = pos
 	m.mu.Unlock()
@@ -225,7 +227,7 @@ func (m *Manager) Rehydrate(ctx context.Context) int {
 		}
 
 		pos := &managedPos{symbol: p.Symbol, qty: p.Qty, entryPrice: p.AvgEntry, entryTime: entryTime,
-			stopOrderID: stopID, stopPrice: stopPrice, conf: 0.6}
+			stopOrderID: stopID, stopPrice: stopPrice, conf: 0.6, source: "rehydrated"}
 		m.mu.Lock()
 		m.open[p.Symbol] = pos
 		m.mu.Unlock()
@@ -472,13 +474,20 @@ func (m *Manager) close(pos *managedPos, note string) {
 	delete(m.open, sym)
 	m.mu.Unlock()
 	m.eng.alloc.Release(sym)
-	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "outcome", Symbol: sym, Note: note})
-	log.Printf("[quant] CLOSED %s — %s; capital released", sym, note)
+	pnl := 0.0
+	if px := m.eng.LastClose(sym); px > 0 {
+		pnl = (px - pos.entryPrice) * pos.qty
+	}
+	// Source-tagged outcome so the report can attribute realized P&L per pipeline (dip vs
+	// signal) and build the dip-agent scorecard. P&L is the manager's approximate
+	// mark-to-close; the broker reconstruction remains the accounting source of truth.
+	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "outcome", Symbol: sym, Note: note,
+		Output: map[string]interface{}{
+			"source": pos.source, "pnl": round2(pnl), "win": pnl > 0,
+			"conf": pos.conf, "held_min": round2(time.Since(pos.entryTime).Minutes()),
+		}})
+	log.Printf("[quant] CLOSED %s (%s) — %s; approx P&L $%.2f; capital released", sym, pos.source, note, pnl)
 	if m.OnClosed != nil {
-		pnl := 0.0
-		if px := m.eng.LastClose(sym); px > 0 {
-			pnl = (px - pos.entryPrice) * pos.qty
-		}
 		m.OnClosed(sym, pnl)
 	}
 }

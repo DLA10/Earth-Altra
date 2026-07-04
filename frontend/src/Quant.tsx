@@ -101,13 +101,25 @@ export function Quant() {
         <Card label="Budget free" value={`$${a.free.toFixed(0)} / $${a.budget.toFixed(0)}`} />
       </div>
 
-      {/* The team */}
+      {/* Budget vs real account equity (the allocator is capped at real cash) */}
+      <div className="attr-verdict" style={{ marginBottom: 12 }}>
+        Allocator budget <b>${a.budget.toFixed(0)}</b>
+        {a.account_equity > 0 ? (
+          <> · capped at real paper-account equity <b>${a.account_equity.toFixed(0)}</b>
+            {a.configured_max > a.account_equity && <span className="neg"> (target ${a.configured_max.toFixed(0)} trimmed to fit the account)</span>}
+          </>
+        ) : (
+          <span className="muted"> · account equity not yet synced</span>
+        )}
+        {" · "}deployed <b>${a.deployed.toFixed(0)}</b>
+      </div>
+
+      {/* The team — models are the ACTUAL configured ones (from the backend), so this can't
+          drift out of sync with what's really running. */}
       <div className="quant-agents">
-        <AgentChip name="Detector" role="dip + bounce (deterministic)" />
-        <AgentChip name="Agent 2 · Entry" role="Opus — buy/no-buy" />
-        <AgentChip name="Allocator" role={`shared budget · ${a.open_count}/${a.max_concurrent} slots`} />
-        <AgentChip name="Agent 3 · Exit" role="Haiku — trailing stop + verbs" />
-        <AgentChip name="Agent 4 · Sentiment" role="local gemma2:2b" />
+        {(rep.agents ?? []).map((ag) => (
+          <AgentChip key={ag.name} name={ag.name} model={ag.model} role={ag.role} live={ag.live} />
+        ))}
       </div>
 
       {/* Strategy scoreboard (rolling 20d) */}
@@ -184,6 +196,44 @@ export function Quant() {
           </>
         )}
       </div>
+
+      {/* Dip-agent scorecard: is Agent 2 picking real bounces or catching knives? */}
+      {rep.dip_score && (
+        <div className="panel">
+          <div className="panel-title">Dip agent scorecard — real bounces vs falling knives (rolling {rep.dip_score.window_days}d)</div>
+          <table className="q-table">
+            <thead>
+              <tr><th>Entry pipeline</th><th>Trades</th><th>Win rate</th><th>Total P&L</th><th>Avg P&L</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="mono-strong">Dip (Agent 2)</td>
+                <td>{rep.dip_score.dip.trades}</td>
+                <td>{(rep.dip_score.dip.win_rate * 100).toFixed(0)}%</td>
+                <td className={cls(rep.dip_score.dip.total_pnl)}>{money(rep.dip_score.dip.total_pnl)}</td>
+                <td className={cls(rep.dip_score.dip.avg_pnl)}>{money(rep.dip_score.dip.avg_pnl)}</td>
+              </tr>
+              <tr>
+                <td className="mono-strong">Signal engine (for comparison)</td>
+                <td>{rep.dip_score.signal.trades}</td>
+                <td>{(rep.dip_score.signal.win_rate * 100).toFixed(0)}%</td>
+                <td className={cls(rep.dip_score.signal.total_pnl)}>{money(rep.dip_score.signal.total_pnl)}</td>
+                <td className={cls(rep.dip_score.signal.avg_pnl)}>{money(rep.dip_score.signal.avg_pnl)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="attr-verdict">
+            Agent 2 decisions: <b>{rep.dip_score.approved}</b> approved / <b>{rep.dip_score.rejected}</b> rejected
+            {rep.dip_score.approved > 0 && <> · avg conviction <b>{rep.dip_score.avg_confidence.toFixed(2)}</b></>}
+            {rep.dip_score.dip.trades > 0 && (
+              <> · knife rate <b className={rep.dip_score.knife_rate > 0.6 ? "neg" : "pos"}>{(rep.dip_score.knife_rate * 100).toFixed(0)}%</b> (dip trades that lost)</>
+            )}
+            <div className={rep.dip_score.dip.total_pnl < 0 && rep.dip_score.dip.trades >= 5 ? "neg" : ""} style={{ marginTop: 4 }}>
+              {rep.dip_score.verdict}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Open positions */}
       <div className="panel">
@@ -263,10 +313,14 @@ function Card({ label, value, cls }: { label: string; value: string; cls?: strin
   );
 }
 
-function AgentChip({ name, role }: { name: string; role: string }) {
+function AgentChip({ name, model, role, live }: { name: string; model?: string; role: string; live?: boolean }) {
   return (
     <div className="agent-chip">
-      <div className="agent-name">{name}</div>
+      <div className="agent-name">
+        {name}
+        {live === false && <span className="agent-off" title="not currently running"> · off</span>}
+      </div>
+      {model && <div className="agent-model">{model}</div>}
       <div className="agent-role">{role}</div>
     </div>
   );

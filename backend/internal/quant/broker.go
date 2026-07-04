@@ -59,6 +59,40 @@ func (b *Broker) do(method, path string, payload interface{}) ([]byte, int, erro
 	return rb, resp.StatusCode, nil
 }
 
+// AccountInfo is the paper account's live capital snapshot.
+type AccountInfo struct {
+	Cash        float64
+	BuyingPower float64
+	Equity      float64 // portfolio value (cash + positions)
+}
+
+// Account fetches the paper account's real cash / buying power / equity so the allocator
+// can cap its budget at money that actually exists (rather than assuming a fixed number).
+func (b *Broker) Account() (AccountInfo, error) {
+	rb, code, err := b.do(http.MethodGet, "/account", nil)
+	if err != nil {
+		return AccountInfo{}, err
+	}
+	if code != http.StatusOK {
+		return AccountInfo{}, fmt.Errorf("account (%d): %s", code, strings.TrimSpace(string(rb)))
+	}
+	var a struct {
+		Cash           string `json:"cash"`
+		BuyingPower    string `json:"buying_power"`
+		Equity         string `json:"equity"`
+		PortfolioValue string `json:"portfolio_value"`
+	}
+	if err := json.Unmarshal(rb, &a); err != nil {
+		return AccountInfo{}, err
+	}
+	pf := func(s string) float64 { f, _ := strconv.ParseFloat(s, 64); return f }
+	eq := pf(a.Equity)
+	if eq == 0 {
+		eq = pf(a.PortfolioValue)
+	}
+	return AccountInfo{Cash: pf(a.Cash), BuyingPower: pf(a.BuyingPower), Equity: eq}, nil
+}
+
 func (b *Broker) order(payload map[string]interface{}) (string, error) {
 	rb, code, err := b.do(http.MethodPost, "/orders", payload)
 	if err != nil {

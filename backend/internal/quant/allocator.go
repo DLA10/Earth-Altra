@@ -12,10 +12,14 @@ import (
 // recycles capital live as positions close.
 type Allocator struct {
 	mu          sync.Mutex
-	budget      float64
+	budget      float64 // configured target budget (from config / daily_universe)
 	perPosition float64
 	maxConc     int
 	deployed    map[string]float64 // symbol -> $ committed (live; freed on Release)
+	// equityCeiling is the paper account's REAL equity, synced from the broker. The
+	// effective budget is capped at this so the desk can never try to deploy more cash
+	// than the account actually holds (0 = not yet known → no cap, assume the budget).
+	equityCeiling float64
 }
 
 // minEntryConfidence is the hard floor below which no buy is ever funded.
@@ -52,12 +56,30 @@ func (a *Allocator) deployedTotalLocked() float64 {
 	return t
 }
 
+// effectiveBudgetLocked is the smaller of the configured budget and the account's real
+// equity — the desk never commits more than the paper account actually holds.
+func (a *Allocator) effectiveBudgetLocked() float64 {
+	if a.equityCeiling > 0 && a.equityCeiling < a.budget {
+		return a.equityCeiling
+	}
+	return a.budget
+}
+
 func (a *Allocator) freeLocked() float64 {
-	f := a.budget - a.deployedTotalLocked()
+	f := a.effectiveBudgetLocked() - a.deployedTotalLocked()
 	if f < 0 {
 		f = 0
 	}
 	return f
+}
+
+// SetEquityCeiling syncs the allocator to the paper account's real equity (from the
+// broker). Called at startup and periodically; the effective budget is capped here so a
+// drawdown that shrinks the account automatically shrinks what the desk will deploy.
+func (a *Allocator) SetEquityCeiling(equity float64) {
+	a.mu.Lock()
+	a.equityCeiling = equity
+	a.mu.Unlock()
 }
 
 // halfSlice is the smallest position we'll open (medium-conviction size).
@@ -184,13 +206,15 @@ func Rank(cands []Candidate) []Candidate {
 
 // AllocSnapshot is a read-only view for the API/page.
 type AllocSnapshot struct {
-	Budget      float64            `json:"budget"`
-	Free        float64            `json:"free"`
-	Deployed    float64            `json:"deployed"`
-	OpenCount   int                `json:"open_count"`
-	MaxConc     int                `json:"max_concurrent"`
-	PerPosition float64            `json:"per_position"`
-	Positions   map[string]float64 `json:"positions"`
+	Budget        float64            `json:"budget"`         // effective (min of configured & equity)
+	ConfiguredMax float64            `json:"configured_max"` // the target budget before the equity cap
+	AccountEquity float64            `json:"account_equity"` // real paper-account equity (0 = unknown)
+	Free          float64            `json:"free"`
+	Deployed      float64            `json:"deployed"`
+	OpenCount     int                `json:"open_count"`
+	MaxConc       int                `json:"max_concurrent"`
+	PerPosition   float64            `json:"per_position"`
+	Positions     map[string]float64 `json:"positions"`
 }
 
 func (a *Allocator) Snapshot() AllocSnapshot {
@@ -201,7 +225,8 @@ func (a *Allocator) Snapshot() AllocSnapshot {
 		pos[k] = v
 	}
 	return AllocSnapshot{
-		Budget: a.budget, Free: a.freeLocked(), Deployed: a.deployedTotalLocked(),
+		Budget: a.effectiveBudgetLocked(), ConfiguredMax: a.budget, AccountEquity: a.equityCeiling,
+		Free: a.freeLocked(), Deployed: a.deployedTotalLocked(),
 		OpenCount: len(a.deployed), MaxConc: a.maxConc, PerPosition: a.perPosition, Positions: pos,
 	}
 }
