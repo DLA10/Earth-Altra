@@ -212,12 +212,14 @@ START-Live-Optimus.bat      one-click Windows launcher
   relative strength, first-hour reversal) over the curated QUANT_UNIVERSE.json (~100
   names), fed as an ADDITIVE bar consumer off the single SIP stream. Every signal + its
   counterfactual bracket outcome is journaled to `data/signals/*.jsonl` (the ML training
-  set), annotated with the learned **time-of-day gate** verdict (`tod_stats.json`,
-  persisted + seeded from backtests; `EntryAllowed`). The same detectors power
+  set), annotated with the **time-of-day gate** verdict (`tod_stats.json`, decayed
+  buckets — halflife 30 outcomes; `EntryAllowed`). The TOD gate is **shadow-only by
+  default** since the 2026-07 re-validation (its edge didn't survive a regime change —
+  RESEARCH_BACKLOG #3); `QUANT_TOD_GATE=true` re-enforces it. The same detectors power
   `cmd/backtest`. Execution: `quant.SignalTrader` bridges published signals to the PAPER
-  broker (validated Tier-1 config) — TOD gate → LLM entry judge (`signaljudge.go`,
-  red-flag veto + conviction sizing) → shared allocator → Manager (trailing-stop floor,
-  Agent 3 exits, EOD flatten) — gated by `QUANT_SIGNALS_LIVE` and the daily loss cap.
+  broker — LLM entry judge (`signaljudge.go`, red-flag veto + conviction sizing) →
+  shared allocator → Manager (trailing-stop floor, Agent 3 exits, EOD flatten) — gated
+  by `QUANT_SIGNALS_LIVE`, scoreboard demotion, and the daily loss cap.
 
 - **`risk`** — deterministic guardrails shared by the backtester and (future) live-paper
   signal execution: daily loss cap, per-trade risk / notional sizing, concurrency cap,
@@ -379,6 +381,7 @@ chart's single-symbol subscription.
 | `QUANT_SIGNALS_LIVE` | `true` | Route signal-engine entries to the paper broker (false = shadow only) |
 | `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge model |
 | `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries once day P&L ≈ −cap |
+| `QUANT_TOD_GATE` | `false` | Enforce the time-of-day gate (default shadow-only: journals verdicts, blocks nothing) |
 | `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | `localhost:11434` / `gemma2:2b` | Agent 4 sentiment (local) |
 
 Backfill always loads the full current session day per symbol (no bar-count knob).

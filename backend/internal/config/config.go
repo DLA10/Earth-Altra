@@ -88,6 +88,14 @@ type Config struct {
 	// QuantDailyLossCap halts new signal entries once the day's approximate realized
 	// P&L reaches -cap (USD).
 	QuantDailyLossCap float64
+	// QuantTODGate: when true the signal trader ENFORCES the learned time-of-day gate
+	// (skips entries in buckets with proven negative expectancy). Default FALSE
+	// (shadow-only) since the 2026-07 re-validation: cumulative buckets fail across a
+	// regime change (12-mo: −$718 base → −$961 gated) and decayed buckets are too
+	// data-starved to beat no-gate on any window tested. The engine still journals
+	// tod_bucket/tod_blocked per signal and keeps decayed stats fresh for a future
+	// re-review; flipping this to true re-enforces without a code change.
+	QuantTODGate bool
 	// QuantStrategistModel is the pre-market Strategist agent's model ("" uses default).
 	QuantStrategistModel string
 	// QuantStrategist enables the pre-market posture/allocation agent.
@@ -142,6 +150,7 @@ func Load() (*Config, error) {
 		QuantSignalsLive:    envBool("QUANT_SIGNALS_LIVE", true),
 		QuantJudgeModel:     envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
 		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
+		QuantTODGate:        envBool("QUANT_TOD_GATE", false),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
 		ResearchLoop:         envBool("RESEARCH_LOOP", true),

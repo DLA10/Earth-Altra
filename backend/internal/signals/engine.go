@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,13 +55,30 @@ type Engine struct {
 	todPath string
 }
 
-// todStat is one persisted conditioning bucket.
+// todStat is one persisted conditioning bucket. N/Sum decay exponentially per outcome
+// (todDecayHalflife) so a bucket can FORGET a stale regime: the 12-month re-test showed
+// cumulative-forever buckets kept blocking entries months after the regime that earned
+// the block had ended. Integer-n legacy seed files unmarshal into float64 unchanged.
 type todStat struct {
-	N   int     `json:"n"`
+	N   float64 `json:"n"`
 	Sum float64 `json:"sum"`
 }
 
-func (s *todStat) blocks() bool { return s.N >= condMinSamples && s.Sum/float64(s.N) < 0 }
+// update folds one resolved outcome in. halflife 0 = legacy cumulative accumulation
+// (kept so the backtester can reproduce pre-decay results exactly); >0 = decay existing
+// evidence by 0.5^(1/halflife) first, capping the effective sample size at
+// ~1.44×halflife and letting recent outcomes dominate the mean.
+func (s *todStat) update(r float64, halflife int) {
+	if halflife > 0 {
+		d := math.Pow(0.5, 1/float64(halflife))
+		s.N *= d
+		s.Sum *= d
+	}
+	s.N++
+	s.Sum += r
+}
+
+func (s *todStat) blocks() bool { return s.N >= condMinSamples && s.Sum/s.N < 0 }
 
 // pendingOutcome tracks one published signal until its counterfactual bracket resolves.
 type pendingOutcome struct {
@@ -354,8 +372,7 @@ func (e *Engine) resolveOutcomes(sym string, b Bar) {
 		if e.tod[tk] == nil {
 			e.tod[tk] = &todStat{}
 		}
-		e.tod[tk].N++
-		e.tod[tk].Sum += r
+		e.tod[tk].update(r, todDecayHalflife)
 		e.saveTOD()
 		due = append(due, map[string]interface{}{
 			"type":          "outcome",

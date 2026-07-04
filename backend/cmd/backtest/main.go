@@ -75,6 +75,8 @@ func main() {
 	ensembleClfMargin := flag.Float64("ensembleclfmargin", 0.03, "P2.2: minimum clf expected R to pass its leg")
 	ensembleRankQ := flag.Float64("ensemblerankq", 0.70, "P2.2: rank leg must clear this quantile of the strategy's PRIOR-day rank scores")
 	chase := flag.Bool("chase", false, "P2.3: passive limit for 3 minutes, then chase to market if unfilled and price is within 0.1xATR of the entry (mutually exclusive with -passive)")
+	todDecay := flag.Int("toddecay", 0, "with -tod: exponentially forget bucket evidence with this halflife in outcomes (recent regime dominates); 0 = legacy cumulative-forever buckets")
+	todSeed := flag.String("todseed", "", "with -tod: write the run's final TOD bucket state to this path as a live-engine seed (tod_stats.json schema)")
 	outPath := flag.String("out", "", "write full JSON result here (default: data/backtests/<ts>.json)")
 	flag.Parse()
 
@@ -125,6 +127,8 @@ func main() {
 		EnsembleClfMargin:    *ensembleClfMargin,
 		EnsembleRankQuantile: *ensembleRankQ,
 		ChaseExecution:       *chase,
+		TODDecayHalflife:     *todDecay,
+		TODSeedPath:          *todSeed,
 	}
 	if *mlpred != "" {
 		preds, err := loadPredictions(*mlpred)

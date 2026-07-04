@@ -89,6 +89,15 @@ type BTConfig struct {
 	// TODFilter (#3): block a (strategy, half-hour-of-session) bucket once ≥
 	// condMinSamples resolved outcomes show a negative mean R for that bucket.
 	TODFilter bool
+	// TODDecayHalflife applies exponential forgetting to the TOD buckets: each resolved
+	// outcome first decays the bucket's evidence by 0.5^(1/halflife), so recent outcomes
+	// dominate and a bucket blocked in a stale regime can recover. 0 = legacy
+	// cumulative-forever accumulation (reproduces all pre-decay results exactly).
+	TODDecayHalflife int
+	// TODSeedPath, when set with TODFilter, writes the run's FINAL TOD bucket state to
+	// this path in the live engine's tod_stats.json schema (same todStat type), so the
+	// live gate can be re-seeded reproducibly from a backtest.
+	TODSeedPath string
 	// RegimeRouter (#4): block a (strategy, market-state) pair — state = QQQ prior
 	// close above/below its 20-day MA — once ≥ condMinSamples resolved outcomes show a
 	// negative mean R for that pair. Soft routing: other strategies keep trading.
@@ -141,6 +150,10 @@ const (
 	condMinScores    = 100  // prior scores required before the top-quantile gate applies
 	passiveWindowMin = 5    // minutes a passive limit rests before it is cancelled
 	throttleAlpha    = 0.05 // EWMA weight for the sizing throttle
+	// todDecayHalflife is the LIVE engine's TOD forgetting rate, in outcomes (mirrors
+	// cusumDecayN=30). Fixed before the decay re-validation ran; the only alternative
+	// tested (60) was a pre-registered sensitivity check, not a sweep.
+	todDecayHalflife = 30
 )
 
 // Pre-registered P2.3 constants — fixed before this experiment ran; never swept.
@@ -419,7 +432,7 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 	}
 
 	// Online conditioning statistics (#3, #4, #6), fed by writeRow as outcomes resolve.
-	todStats := map[string]*runStat{}      // "strategy|halfHourBucket"
+	todStats := map[string]*todStat{}      // "strategy|halfHourBucket" (shared live type)
 	routerStats := map[string]*runStat{}   // "strategy|dayState"
 	throttleStats := map[string]*ewmaStat{} // "strategy"
 	var trainRows []DatasetRow
@@ -441,9 +454,9 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 		// outcome is only known now, and only future entries see the updated stat.
 		if k := cf.sig.Strategy + "|" + strconv.Itoa(cf.todBucket); true {
 			if todStats[k] == nil {
-				todStats[k] = &runStat{}
+				todStats[k] = &todStat{}
 			}
-			todStats[k].add(r)
+			todStats[k].update(r, cfg.TODDecayHalflife)
 		}
 		if k := cf.sig.Strategy + "|" + strconv.Itoa(cf.dayState); true {
 			if routerStats[k] == nil {
@@ -984,6 +997,15 @@ func RunBacktest(uni *Universe, minuteBars, dailyBars map[string][]Bar, cfg BTCo
 		}
 		if s.GateRejected > 0 {
 			s.GateRejectedAvgR /= float64(s.GateRejected)
+		}
+	}
+	// Export the run's final TOD bucket state as a live-engine seed (identical schema to
+	// data/signals/tod_stats.json by construction — same todStat type).
+	if cfg.TODSeedPath != "" && cfg.TODFilter {
+		if b, err := json.MarshalIndent(todStats, "", " "); err == nil {
+			if os.WriteFile(cfg.TODSeedPath, b, 0o644) == nil {
+				fmt.Printf("TOD seed written: %s (%d buckets)\n", cfg.TODSeedPath, len(todStats))
+			}
 		}
 	}
 	return res

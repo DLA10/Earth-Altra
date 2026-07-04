@@ -221,6 +221,30 @@ func TestEngineCooldownAndOutcome(t *testing.T) {
 	}
 }
 
+// TestTODStatDecayForgetsOldRegime is the mechanism check behind the decay fix: a bucket
+// blocked by a stale hostile regime must recover once recent outcomes turn positive —
+// which the legacy cumulative accumulation provably cannot do on the same evidence.
+func TestTODStatDecayForgetsOldRegime(t *testing.T) {
+	decayed := &todStat{N: 100, Sum: -50} // old regime: mean −0.5 over 100 outcomes → blocked
+	legacy := &todStat{N: 100, Sum: -50}
+	if !decayed.blocks() || !legacy.blocks() {
+		t.Fatal("seeded-negative buckets must start blocked")
+	}
+	for i := 0; i < 60; i++ { // new regime: 60 straight outcomes of +0.5R
+		decayed.update(0.5, 30)
+		legacy.update(0.5, 0)
+	}
+	if decayed.blocks() {
+		t.Fatalf("decayed bucket must forget the old regime (N=%.1f mean=%.3f)", decayed.N, decayed.Sum/decayed.N)
+	}
+	if !legacy.blocks() {
+		t.Fatal("cumulative bucket must still be blocked on identical evidence (the failure mode being fixed)")
+	}
+	if decayed.N < condMinSamples {
+		t.Fatalf("decayed effective N (%.1f) fell below condMinSamples — gate could never re-block", decayed.N)
+	}
+}
+
 func TestEngineExtraFeaturesMergedIntoPublishedSignal(t *testing.T) {
 	uni := &Universe{ContextSymbols: []string{"QQQ"}, Sectors: map[string][]string{"test": {"AAA"}},
 		sectorOf: map[string]string{"AAA": "test"}}

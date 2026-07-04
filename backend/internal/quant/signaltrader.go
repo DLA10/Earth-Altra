@@ -14,11 +14,12 @@ import (
 )
 
 // SignalTrader is the execution bridge that ships the validated signal-engine
-// configuration (all strategies + the learned time-of-day gate — the Tier-1 champion) to
-// the quant PAPER account. Decision chain for every published signal:
+// configuration (all six strategies) to the quant PAPER account. Decision chain for
+// every published signal:
 //
-//	signal → TOD gate (EntryAllowed) → session/posture guards → daily loss cap →
-//	allocator slot/budget → LLM entry judge (red-flag veto + conviction sizing) →
+//	signal → TOD gate (only if QUANT_TOD_GATE; shadow-journaled otherwise) →
+//	session/posture guards → daily loss cap → allocator slot/budget →
+//	LLM entry judge (red-flag veto + conviction sizing) →
 //	Manager (market entry → trailing-stop floor → Agent 3 exit loop → EOD flatten)
 //
 // Every decision, including every skip, is written to the quant decision log. The dip
@@ -34,6 +35,7 @@ type SignalTrader struct {
 	appCtx  context.Context
 	loc     *time.Location
 	enabled bool
+	todGate bool // enforce the TOD gate (false = shadow-only: journaled, never blocks)
 
 	// Demoted, when set, reports whether the eval scoreboard has benched a strategy
 	// (negative rolling expectancy or CUSUM alarm) — benched strategies keep journaling
@@ -42,11 +44,12 @@ type SignalTrader struct {
 }
 
 // NewSignalTrader wires the bridge. limits supplies the daily loss cap; the allocator
-// (inside eng) owns budget/slots/sizing.
-func NewSignalTrader(ctx context.Context, eng *Engine, mgr *Manager, sigs *signals.Engine, judge *SignalJudge, limits risk.Limits, enabled bool) *SignalTrader {
+// (inside eng) owns budget/slots/sizing. todGate enforces the time-of-day gate; when
+// false the gate runs shadow-only (the engine still journals every bucket verdict).
+func NewSignalTrader(ctx context.Context, eng *Engine, mgr *Manager, sigs *signals.Engine, judge *SignalJudge, limits risk.Limits, enabled, todGate bool) *SignalTrader {
 	t := &SignalTrader{
 		eng: eng, mgr: mgr, sigs: sigs, judge: judge,
-		day: risk.NewDay(limits, eng.loc), appCtx: ctx, loc: eng.loc, enabled: enabled,
+		day: risk.NewDay(limits, eng.loc), appCtx: ctx, loc: eng.loc, enabled: enabled, todGate: todGate,
 	}
 	// Feed the loss-cap tracker with approximate realized P&L from every close.
 	mgr.OnClosed = func(sym string, pnl float64) {
@@ -77,8 +80,10 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		log.Printf("[signal-trader] skip %s %s — %s", sig.Strategy, sym, reason)
 	}
 
-	// 1) The Tier-1 champion mechanism: the learned time-of-day gate.
-	if !t.sigs.EntryAllowed(sig) {
+	// 1) The learned time-of-day gate (decayed buckets). Enforcement is switchable
+	// (QUANT_TOD_GATE): the 12-month re-test showed its edge is regime-dependent, so the
+	// operator can demote it to shadow without losing the journal evidence.
+	if t.todGate && !t.sigs.EntryAllowed(sig) {
 		skip("time-of-day bucket has proven negative expectancy")
 		return
 	}

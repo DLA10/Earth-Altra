@@ -6,18 +6,19 @@
 |---|---|---|
 | 1 | First-hour reversal | ❌ **KILLED** (−$515/6mo standalone; open30 analysis: corr +0.017 — no reversal effect in this universe). Detector kept shadow-only; TOD gate benches it |
 | 2 | Cross-sectional ranking gate | ➖ **BENCHED — 12-mo retest FAILED** (rank gate at `-mltopq 0.70` on 246 days: accepted-R −0.020 < rejected-R +0.009, i.e. anti-selection; fails the promotion bar again; stays off order flow) |
-| 3 | Time-of-day conditioning | ✅ SHIPPED, now **⚠ REGIME-DEPENDENT** (promoted on 6-mo: −$35→+$62, holdout +$158→+$506; 12-mo recheck HURT: base −$718 → TOD −$961 — Jul–Dec 2025 regime inverts the buckets. Verdict: keep live on paper — its buckets update from live outcomes and CUSUM/demotion adjudicate — but do NOT extend its authority; re-review after ~1 month of live outcomes) |
+| 3 | Time-of-day conditioning | ❌ **DEMOTED TO SHADOW** (2026-07-04, pre-registered bar). Cumulative buckets fail across a regime change (12-mo: base −$718 → gated −$961); the decay fix (halflife 30, mirroring cusumDecayN) repairs part of that (−$902) but destroys the gate's recent-window value (Jan–Jul: base −$219, cumulative −$31, decay-30 −$692; Apr–Jul: base +$871, cumulative +$958, decay-30 +$430) — at ~30 outcomes/day over ~78 buckets the gate is data-starved at any forgetting rate. Neither variant beat no-gate on both windows → fallback fired: `QUANT_TOD_GATE` defaults false, buckets keep journaling with decay for a future re-review |
 | 4 | Regime mixture-of-experts | ➖ tested as 2-state router (`-router`): −38% drawdown, costs upside; available by flag, not in production |
-| 5 | Passive execution | ❌ **KILLED** as pure-passive (12% fill, adverse selection, holdout −$239); chase variant = P2.3 |
+| 5 | Passive execution | ❌ **KILLED** as pure-passive (12% fill, adverse selection, holdout −$239); chase variant (P2.3) also **KILLED** 2026-07-04: worst of the three execution models on 12 mo (market −$718 · passive −$638 · chase −$802 — chasing near-misses is adverse selection). Market entries stay |
 | 6 | Vol-targeted / Kelly throttle | ❌ **KILLED** (EWMA half-sizing: no value at 6mo) |
 | 7 | Bigger dataset + recency weighting | ◐ recency weighting **KILLED** (holdout spread +0.009 → −0.037); 12-month dataset **DONE** (Phase-1 Task 4: 17,511 rows Jul 2025–Jul 2026 in `ml_dataset_12mo.jsonl`; clf holdout spread +0.021 — selectivity real but still fails the dollar bar; full tables in SONNET_REPORT.md) |
 | 8 | Microstructure features | ◐ wiring **DONE** (Phase-1 Task 2: `spread_bps`/`flow_delta_5m`/`flow_buy_frac` journal live); needs weeks of live collection before it's usable |
-| 9 | Lead-lag graph features | ⏳ Phase 2 (P2.1) |
-| 10 | Ensemble abstention | ⏳ Phase 2 (P2.2) |
+| 9 | Lead-lag graph features | ➖ **TESTED, NO PROMOTION** (P2.1, 2026-07-04): sector_ret_15m/peer_gap_15m ablation mixed — clf full-window spread +0.015→+0.028 but holdout +0.021→+0.007 (worse where it counts). Features journal live via the ExtraFeatures hook; revisit at a bigger dataset |
+| 10 | Ensemble abstention | ❌ **KILLED** as 3-model agreement (P2.2, 2026-07-04): spread −0.014 (anti-selects) despite +$171 — the dollars came from cutting volume, not picking better. The framework caught it |
 | 11 | LLM catalyst features | ⏳ future |
 | 12 | Temporal CNN | ⏳ future (needs 20k+ rows) |
 | 13 | Changepoint watchdog | ✅ **SHIPPED** (CUSUM w/ alarm decay in `internal/evals`; benched dip_bounce + orb_breakout on its first live day) |
 | 14 | Intraday pairs | ⏳ future (needs operator decision on shorting) |
+| 15 | LightGBM clf gate (margin 0.03) | ✅ **PASSED THE FULL PROMOTION BAR** (2026-07-04) — the only mechanism ever to do so. Walk-forward, zero lookahead, positive accepted-vs-rejected spread AND positive dollars on all three windows: 12-mo −$718→**+$329**, Jan–Jul −$219→**+$302**, Apr–Jul holdout +$871→**+$1,512** (drawdown lower). NOT yet live: needs nightly-retrain + live-inference infrastructure (separate build, operator go required) |
 
 > Rules of the queue (unchanged from QUANT_VISION §5): every idea states its economic
 > *why* before its model, is validated walk-forward through the existing harness

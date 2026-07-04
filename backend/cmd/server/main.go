@@ -385,7 +385,7 @@ func main() {
 			judge := quant.NewSignalJudge(qAnth, cfg.QuantJudgeModel)
 			limits := risk.Defaults()
 			limits.DailyLossCapUSD = cfg.QuantDailyLossCap
-			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive)
+			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive, cfg.QuantTODGate)
 			trader.Demoted = func(strategy string) bool {
 				sbMu.RLock()
 				defer sbMu.RUnlock()
@@ -393,8 +393,12 @@ func main() {
 			}
 			sigEngine.SetOnSignal(trader.OnSignal)
 			if cfg.QuantSignalsLive {
-				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate + scoreboard demotion active",
-					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap)
+				todMode := "enforcing"
+				if !cfg.QuantTODGate {
+					todMode = "shadow-only"
+				}
+				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate %s | scoreboard demotion active",
+					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap, todMode)
 			} else {
 				log.Printf("signal-trader: disabled (QUANT_SIGNALS_LIVE=false) — shadow journaling only")
 			}
