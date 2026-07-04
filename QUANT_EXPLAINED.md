@@ -23,6 +23,162 @@ uses. Nothing described here can spend a real dollar.
 
 ---
 
+## 1b. The whole workflow on one page
+
+Everything below, top to bottom. `[Go]` = deterministic code, `[ML]` = trained model,
+`[AI]` = LLM agent; `═►` order/money flow, `─►` data flow, `⟳` scheduled loop.
+
+```
+════════════════════════════════════════════════════════════════════════════
+   EARTH-ALTRA · AI QUANT DESK — COMPLETE WORKFLOW        ‹PAPER ACCOUNT ONLY›
+════════════════════════════════════════════════════════════════════════════
+ LEGEND   [Go] deterministic code   [ML] trained model   [AI] LLM agent
+          ═► order/money flow   ─► data flow   ⟳ scheduled loop   ✓ pass  ✗ reject
+
+
+━━━ 1 · MARKET DATA IN ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ [Go] ━━
+
+     Alpaca SIP WebSocket  ── one connection, every trade & quote, live
+                 │
+                 ▼
+     Candle engine ── folds ticks into 1-minute bars in memory
+     ~96 curated tech stocks  +  SPY/QQQ/SMH (market context, never traded)
+                 │
+                 │  additive listener — adds ZERO latency to the
+                 ▼  real-money Execution page (untouched, separate)
+
+
+━━━ 2 · DETECTION — 6 scouts, all at once, every stock, every bar ━━━━ [Go] ━━
+        pure math · no AI · the SAME code runs in the backtester
+
+     orb_breakout    break of the first-15-min box on volume
+     vwap_reclaim    flush below VWAP, then a green close back above
+     momentum_cont   new high after a shallow pullback in an uptrend
+     dip_bounce      deep oversold drop + a confirmed green bounce
+     rel_strength    new highs while QQQ (the market) is flat/red
+     fh_reversal     morning dump stabilises & turns  (weakest → watched hardest)
+
+     each fires →  SIGNAL { entry · stop · target (ATR-scaled) · feature snapshot }
+     limits: 1 per (strategy,stock)/30min · max 2/day · LONG ONLY
+                 │
+        ┌────────┴─────────────────────────────┐
+        ▼                                       ▼
+  (every signal, traded or not)          (this signal continues ↓)
+        │
+━━━ 3 · THE JOURNAL ━━━━ [Go] ━━━━━━━━━━━━━━━━━━━━━┓
+   writes EVERY signal + its counterfactual        ┃  feeds ⟳
+   (would target or stop hit first?)               ┃  the ML retrain,
+   → a self-labelling training set, grows daily ───┺──→ scoreboard & research
+                                                          (see §7)
+
+━━━ 4 · THE ENTRY GAUNTLET — survive ALL, in this exact order ━━━━━━━━━━━━━━━━
+        any gate can REJECT (→ logged, dropped) · NONE can create a trade
+
+   SIGNAL
+     │
+     ▼  [Go] (1) TOD gate ............ SHADOW-ONLY now — logs a verdict,
+     │                                 blocks nothing (QUANT_TOD_GATE=false)
+     ▼  [Go] (2) Scoreboard demotion . strategy losing over 20d? .......... ✗
+     │                                 (automatic · self-reinstating)
+     ▼  [ML] (3) clf gate ★ .......... the strategy's own model scores
+     │                                 expected R;  EV < +0.03R? ........... ✗
+     │                                 ← the promoted edge (6 models)
+     ▼  [Go] (4) Session guard ....... fresh entry after 15:30 ET? ........ ✗
+     │
+     ▼  [Go] (5) Posture ............. Strategist says stand_down? ........ ✗
+     │
+     ▼  [Go] (6) Daily loss cap ...... day ≈ −$150? → halt for the day .... ✗
+     │
+     ▼  [Go] (7) Allocator free? ..... no slot / no cash / already held? .. ✗
+     │                                 (cheap check BEFORE any LLM call)
+     ▼  [AI] (8) Entry judge (Haiku) . reads the tape like a trader:
+     │            • DEFAULT = APPROVE — vetoes only on a nameable red flag
+     │            • veto: exhaustion / hostile tape / thin / too late .... ✗
+     │            • else APPROVE + conviction 0–1  (drives size)
+     │            • judge errors out → skip this one trade (fail-closed) . ✗
+     ▼  [Go] (9) Cautious posture? ... conviction < 0.65? ................ ✗
+     │
+     ▼  ✓ survived every gate → BUY
+
+
+━━━ 5 · SIZING & FUNDING — the budget allocator ━━━━━━━━━━━━━━ [Go, not AI] ━━
+
+     shared budget $8,000 · max 3 open · 1 per symbol · recycles on close
+     conviction ≥0.7 → full slice (~$2,000)   ·   else → half (~$1,000)
+     contention (many buys, few slots) → rank by quality, fund best first
+                 │
+                 ▼  Fund(sym,$) commits the capital
+
+
+━━━ 6 · POSITION LIFECYCLE & EXITS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   [Go] ═► MARKET BUY on the PAPER account
+            │
+   [Go] ═► Trailing stop 1.5% placed on the exchange IMMEDIATELY
+            │        (sub-second safety · follows price up · never loosens)
+            ▼
+   [AI]    Agent 3 exit loop — every 5–12 s while the position is open
+            │   sees: price · P&L% · minutes held · current stop ·
+            │         dist to VWAP · RSI · RVOL · market · last 10 bars
+            │   picks: hold · tighten_stop(up-only) · take_profit · exit_now
+            │   [Go] guardrails: never widens a stop · always keeps one live
+            ▼
+   [Go] ═► 15:55 ET — FLATTEN everything
+            │   exception: at most ONE winner ≤ $2,000 may ride overnight
+            ▼
+        position closes → P&L realised → capital recycled to allocator (§5)
+                        → OUTCOME written back to the JOURNAL (§3) ⟲
+
+
+━━━ 7 · THE BRAINS THAT SUPERVISE & EVOLVE  (times ET) ━━━━━━━━━━━━━━━━━━━━━━━
+
+   08:50–09:25  [AI] Strategist (Opus) ─ scoreboard + last review + trend
+                     → today's posture & budget   (code clamps everything)
+   every 10 min [Go] Eval scoreboard ─ rolling 20d mean-R + CUSUM alarm
+                     → auto-bench / reinstate strategies · judge calibration
+   13:30        [AI] Research loop (Opus·LangGraph) ─ studies the day →
+                     ≤3 evidence-cited proposals → your TELEGRAM
+                     (NEVER auto-applied — you apply changes by hand)
+   16:10        [AI] Reviewer (Opus) ─ plain-English daily report card
+   ~17:05       [ML] Nightly retrain (train_live.py) ─ 6 models on data
+                     incl. today's journal → parity-checked vs Python →
+                     hot-reloaded   (boot catch-up if the models are stale)
+
+   what actually gets better over time:
+      [ML] the 6 gate models — retrained nightly ........ genuinely LEARN
+      [Go] the scoreboard — benches the weak ............ ADAPTS
+      the LLM agents' INPUTS (scoreboard, reviews) ...... get SHARPER
+      the LLM brains themselves ......................... FROZEN, don't self-train
+
+
+━━━ 8 · WHERE THE ORDERS GO — verified paper-only ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   Quant desk broker → key PK…(paper) → https://paper-api.alpaca.markets
+        paper endpoint + paper keys .......... HTTP 200  ✓  (acct PA-REDACTED)
+        live  endpoint + paper keys .......... HTTP 401  ✗  (Alpaca rejects)
+
+   Execution page (YOUR real money) → key AK…(live) → https://api.alpaca.markets
+
+        └── SEPARATE keys · SEPARATE endpoint · NO code path between them ──┘
+
+
+━━━ KILL SWITCHES  (backend/.env) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   QUANT_SIGNALS_LIVE=false → journal only, place no paper orders
+   QUANT_CLF_GATE=false     → ML gate off (desk trades ungated)
+   QUANT_RETRAIN=false      → stop the nightly retrain (gate goes stale → fails open)
+   QUANT_TOD_GATE=true      → re-enable the (currently demoted) time-of-day gate
+   QUANT_DAILY_LOSS_CAP=150   ·   QUANT_OVERNIGHT_CAP=0
+════════════════════════════════════════════════════════════════════════════
+```
+
+> **Honesty footnote the diagram makes visual:** the backtested +$1,512 came from
+> §2 → §3 → §5 with plain bracket exits only. It did **not** include the §4 judge
+> (gate 8) or the §6 Agent 3 / trailing stop — those are live-only discretionary layers
+> that can help or hurt, which is exactly what the live paper run now measures.
+
+---
+
 ## 2. The data plumbing (how prices get in)
 
 - One WebSocket connection to Alpaca's SIP feed streams **every trade and quote** in
