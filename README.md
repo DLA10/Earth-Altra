@@ -1,6 +1,6 @@
 # Earth-Altra — An Autonomous Artificial-Intelligence Quant Trading Desk
 
-A trading platform with two halves. A human trades **real money** through a fast,
+A trading platform with two halves. A user trades **real money** through a fast,
 safety-first terminal; on top of it runs an **autonomous artificial-intelligence quant
 desk** that trades a **separate simulated (paper) account entirely by itself** — finding
 setups with plain-rule strategies, filtering them with a machine-learning model, sizing
