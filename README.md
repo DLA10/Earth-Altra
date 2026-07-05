@@ -22,47 +22,62 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║              ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                  ║
-║        live candle engine · in memory · sub-second · one feed, fanned out     ║
+║               ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                 ║
+║        live candle engine · in memory · sub-second · one feed, fanned out      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
         │                          │                                │
         ▼                          ▼                                ▼
 ┌────────────────┐   ┌──────────────────────────────┐   ┌──────────────────────┐
 │ HUMAN TERMINAL │   │        AI QUANT DESK          │   │   MARKET SCANNER      │
-│  real money    │   │        paper money            │   │   ~470 stocks         │
-│  manual orders │   │        fully autonomous       │   │   ranks live movers   │
+│  real money    │   │   agentic · fully autonomous  │   │   ~470 stocks         │
+│  manual orders │   │        paper money            │   │   ranks live movers   │
 └────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
                                      │
-   ┌─────────────────────────────────┴────────────────────────────────────────┐
-   │                        THE AI DECISION PIPELINE                           │
-   │  every gate can only REJECT or SHRINK a trade — none can create one       │
-   │                                                                           │
-   │  six strategies                                                           │
-   │       │  find setups (plain rules, no AI)                                 │
-   │       ▼                                                                   │
-   │  strategy scoreboard   → benches any strategy that is proven to be losing │
-   │       ▼                                                                   │
-   │  machine-learning gate → scores each setup's odds; drops the weak ones    │
-   │       ▼                                                                   │
-   │  language-model judge  → last red-flag veto + sets conviction (size)      │
-   │       ▼                                                                   │
-   │  budget allocator      → capped at real account cash · at most 3 at once  │
-   │       ▼                                                                   │
-   │  position manager      → market entry · trailing stop-loss ·              │
-   │                          exit agent · flatten before the close            │
-   │       ▼                                                                   │
-   │  PAPER broker (simulated account)                                         │
-   └───────────────────────────────────────────────────────────────────────────┘
+   ┌─ THE AI DECISION PIPELINE ──────────────────  ◆ = a language-model agent ──┐
+   │  a gate can only REJECT or SHRINK a trade — none can create one
+   │
+   │  ◆ STRATEGIST · Opus — before the open, sets today's stance & budget
+   │        │
+   │        ▼
+   │    six strategies ............. find the setups           · plain rules
+   │        ▼
+   │    strategy scoreboard ........ bench proven losers       · evaluation
+   │        ▼
+   │    machine-learning gate ...... rate each setup's odds    · six models
+   │        ▼
+   │  ◆ SIGNAL JUDGE · Haiku ....... veto red flags, set size  · agent
+   │        ▼
+   │    budget allocator ........... cap at real cash, 3 max  · code
+   │        ▼
+   │  ◆ EXIT MANAGER · Haiku ....... trailing stop · take profit · cut early
+   │        │            ▲
+   │        │      ◆ SENTIMENT · local model — advises
+   │        ▼
+   │    PAPER broker  (simulated account)
+   │        │
+   │        ▼    after the close
+   │  ◆ REVIEWER · Opus — writes the daily report card
+   │  ◆ RESEARCH LOOP · Opus — proposes at most 3 changes, then STOPS for a human
+   │
+   │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a
+   │    separate messaging dip-alert stream )
+   └────────────────────────────────────────────────────────────────────────────┘
       ▲                          ▲                              │
-      │ taught by                │ governed by                  │ everything logged
+      │ taught by                │ governed by                  │ every action logged
       │                          │                              ▼
-┌──────────────────┐   ┌──────────────────────┐   ┌────────────────────────────┐
-│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL          │
-│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the        │
-│ nightly retrain · │   │ automatic demotion,  │   │   outcome it WOULD have had  │
-│ walk-forward ·    │   │ change-point alarm,  │   │   (taken or not) →           │
-│ backtester        │   │ judge calibration    │   │   a self-labelling dataset  │
-└──────────────────┘   └──────────────────────┘   └────────────────────────────┘
+┌───────────────────┐   ┌──────────────────────┐   ┌───────────────────────────┐
+│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL         │
+│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the       │
+│ nightly retrain · │   │ automatic demotion,  │   │   outcome it WOULD have had │
+│ walk-forward ·    │   │ change-point alarm,  │   │   (taken or not) →          │
+│ backtester        │   │ judge calibration    │   │   a self-labelling dataset │
+└───────────────────┘   └──────────────────────┘   └───────────────────────────┘
+
+  Seven agents (◆) orchestrate the desk: a STRATEGIST sets the daily stance, a
+  SIGNAL JUDGE and a DIP ENTRY agent decide entries, an EXIT MANAGER runs each
+  position, a SENTIMENT model advises, a REVIEWER grades the day, and a human-gated
+  RESEARCH LOOP proposes improvements. Rules and a machine-learning model feed them;
+  deterministic code holds the money.
 ```
 
 **The core design rule — who decides what:** *plain rules find trades · a machine-learning
