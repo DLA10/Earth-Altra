@@ -1,166 +1,234 @@
-# Earth-Altra / OPTIMUS — AI Agentic Quant Trading System
+# Earth-Altra — An Autonomous Artificial-Intelligence Quant Trading Desk
 
-A production-grade, real-money **intraday trading terminal** (Go + React, sub-second SIP
-streaming) that grew an autonomous **AI quant desk** on top: a multi-strategy signal
-engine, a deterministic risk officer, an event-driven backtester with walk-forward ML
-gating, and an LLM agent team (entry / exit / sentiment / daily review) — all governed by
-an **evaluation framework whose job is to kill bad ideas before they touch money**.
+A trading platform with two halves. A human trades **real money** through a fast,
+safety-first terminal; on top of it runs an **autonomous artificial-intelligence quant
+desk** that trades a **separate simulated (paper) account entirely by itself** — finding
+setups with plain-rule strategies, filtering them with a machine-learning model, sizing
+and managing them with a team of language-model agents, and holding every idea to an
+**evaluation framework whose only job is to kill what does not work before it can ever
+risk money.**
 
-> **Honesty first:** the human trades real money through the terminal; **every automated
-> and AI-driven component trades a paper account only.** This repo's most important
-> results are the ideas its own eval harness *rejected* — receipts below. Nothing here is
-> financial advice.
+> **The one hard rule:** the human's money is real; **everything the artificial
+> intelligence does is on a paper account with its own separate keys.** There is no code
+> path from any model or agent to the real account. Nothing here is financial advice.
 
 ---
 
-## Why this project is interesting
+## Architecture at a glance
 
-Most trading-bot repos show a backtest that goes up and to the right. This one shows an
-**engineering system designed to find out the truth**:
+One market-data connection feeds three independent consumers. The centerpiece is the AI
+quant desk: a pipeline of increasingly selective filters, wrapped by a research plane that
+teaches it, an evaluation plane that governs it, and a journal that records everything.
 
-| Eval receipt | What happened |
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                  ║
+║        live candle engine · in memory · sub-second · one feed, fanned out     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+        │                          │                                │
+        ▼                          ▼                                ▼
+┌────────────────┐   ┌──────────────────────────────┐   ┌──────────────────────┐
+│ HUMAN TERMINAL │   │        AI QUANT DESK          │   │   MARKET SCANNER      │
+│  real money    │   │        paper money            │   │   ~470 stocks         │
+│  manual orders │   │        fully autonomous       │   │   ranks live movers   │
+└────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
+                                     │
+   ┌─────────────────────────────────┴────────────────────────────────────────┐
+   │                        THE AI DECISION PIPELINE                           │
+   │  every gate can only REJECT or SHRINK a trade — none can create one       │
+   │                                                                           │
+   │  six strategies                                                           │
+   │       │  find setups (plain rules, no AI)                                 │
+   │       ▼                                                                   │
+   │  strategy scoreboard   → benches any strategy that is proven to be losing │
+   │       ▼                                                                   │
+   │  machine-learning gate → scores each setup's odds; drops the weak ones    │
+   │       ▼                                                                   │
+   │  language-model judge  → last red-flag veto + sets conviction (size)      │
+   │       ▼                                                                   │
+   │  budget allocator      → capped at real account cash · at most 3 at once  │
+   │       ▼                                                                   │
+   │  position manager      → market entry · trailing stop-loss ·              │
+   │                          exit agent · flatten before the close            │
+   │       ▼                                                                   │
+   │  PAPER broker (simulated account)                                         │
+   └───────────────────────────────────────────────────────────────────────────┘
+      ▲                          ▲                              │
+      │ taught by                │ governed by                  │ everything logged
+      │                          │                              ▼
+┌──────────────────┐   ┌──────────────────────┐   ┌────────────────────────────┐
+│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL          │
+│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the        │
+│ nightly retrain · │   │ automatic demotion,  │   │   outcome it WOULD have had  │
+│ walk-forward ·    │   │ change-point alarm,  │   │   (taken or not) →           │
+│ backtester        │   │ judge calibration    │   │   a self-labelling dataset  │
+└──────────────────┘   └──────────────────────┘   └────────────────────────────┘
+```
+
+**The core design rule — who decides what:** *plain rules find trades · a machine-learning
+model rates them · language-model agents judge and manage · deterministic code owns all the
+money.* The agents can only choose a direction, veto, or tighten protection; every limit
+(position size, budget, stop-losses, daily halts) is enforced in code they cannot override.
+
+---
+
+## The strategies (how setups are found)
+
+Six long-only intraday strategies run at the same time, on every stock, all day. Each is
+plain arithmetic — no artificial intelligence — so the exact same code runs in both the
+live desk and the backtester, which is why the backtest can be trusted.
+
+| Strategy | In one line |
 |---|---|
-| 🔪 Curve-fit killed | The best in-sample momentum config (+$596 IS) **died out-of-sample** (−$83). Rejected before deployment by the walk-forward split. |
-| 🔪 Linear ML gate killed | A ridge expected-R gate **anti-selected in all 5 strategies** (rejected signals out-performed accepted ones). Caught by a counterfactual selectivity metric, not P&L. |
-| 🔪 Own validation overturned | A "+$19/day validated" strategy pair was re-tested on 6 months instead of 3 — the profit was **regime-carried** (Q1 gave it all back). Promotion revoked. |
-| ✅ LightGBM promoted (partially) | With 9,014 training signals, a walk-forward LightGBM classifier **passed the signal-ranking bar** (+0.038R accepted vs +0.000R rejected, held-out month positive) — but failed the portfolio-dollar bar, so it still doesn't gate orders. |
+| Opening-range breakout | Buys when a stock pushes above the high of its first fifteen minutes on strong volume. |
+| Average-price reclaim | Buys when a stock falls below its volume-weighted average price for the day and then fights back above it. |
+| Momentum continuation | Buys a stock already trending up that pauses briefly and then resumes. |
+| Dip bounce | Buys a sharp oversold drop **only after a confirmed green recovery candle** — never a falling knife. |
+| Relative strength | Buys a stock that is clearly outperforming the wider market. |
+| First-hour reversal | Buys a stock that was crushed early, stopped making new lows, and turned back up. |
 
-Every decision by every layer — strategy detector, ML model, LLM agent — is logged as
-structured JSONL with its **counterfactual outcome** (what the trade would have done,
-taken or not), so promotion and demotion are earned with evidence, never vibes.
+The universe is about ninety-six liquid, reputable technology names (semiconductors,
+memory, data-center, software, space, quantum) — no penny stocks.
+
+## The machine-learning gate (what makes it selective)
+
+The strategies alone win only about forty-six percent of the time — close to a coin flip.
+A machine-learning model turns that into an edge:
+
+- **One model per strategy** (six gradient-boosted decision-tree classifiers). Each learns,
+  from thousands of past setups, which conditions separate winners from losers, and outputs
+  an **expected reward** for the setup in front of it. Below a small pre-set bar, the trade
+  is rejected.
+- **The brain trains, the hands score.** A Python job **retrains every night** on all
+  history through that day — including the day's own fresh results — so the model walks
+  forward with reality. During the day the Go engine **scores each setup in a fraction of a
+  millisecond in-process** (no Python in the trading path).
+- **Provably identical math.** Each night's model ships with sample inputs and the trainer's
+  own answers; on load, the Go side must reproduce them to six decimal places **or the model
+  is refused.** Silent drift between training and live scoring is impossible.
+- **Fail-open everywhere.** A missing, stale, or unverified model means the desk simply
+  trades unfiltered — it degrades to the plain-strategy baseline, it can never freeze.
+
+## The agent team (judgment and language, never math)
+
+Six language-model agents supervise, size, manage, and explain — every one bounded by code.
+
+| Agent | Model | What it does |
+|---|---|---|
+| Strategist | Opus | Before the open, reads yesterday's results and the market trend and sets the day's stance (normal / cautious / stand-down) and budget. |
+| Signal judge | Haiku | A last red-flag veto on each setup (exhausted move, hostile market, thin liquidity) and a conviction score that sets position size. |
+| Dip entry agent | Haiku | Buy / do-not-buy decision for the older dip-alert pipeline. |
+| Exit manager | Haiku | Manages each open position — tightens the stop, takes profit near the plan's target, or cuts early if the thesis breaks. Now knows *why* the trade was opened, so it manages a quick mean-reversion trade differently from a momentum trade. |
+| Sentiment | local model | Advisory market-mood read that runs on the machine, at no cost. |
+| Reviewer | Opus | After the close, writes a plain-language daily report card the next morning's Strategist reads. |
+
+Agents are invoked with forced structured-output tool calls and cached instructions, so
+their output is always valid and cheap to run.
+
+## The evaluation framework (how bad ideas get killed)
+
+This is the part most trading projects skip, and the part that matters most here.
+
+- **Self-labelling journal.** *Every* signal is recorded with the outcome it *would* have
+  had — target or stop-loss hit first — even the ones never traded. Every few minutes, for
+  free, the system produces labelled training data.
+- **Rolling scoreboard + automatic benching.** Every ten minutes each strategy's last twenty
+  trading days are scored. Any strategy with proven negative expectancy, or a sudden
+  performance break caught by a cumulative-sum change detector, is **automatically stopped
+  from trading** — and automatically reinstated when it recovers. No human involved; it
+  benched two strategies on the very first live day.
+- **The agents are graded too.** Each veto by the judge is joined to what the trade actually
+  did, measuring whether its vetoes really dodge losers.
+- **A pre-registered promotion bar.** Before any experiment runs, the bar is fixed: an idea
+  must show **better trade selection AND better real dollars, on the full history AND on a
+  held-out recent slice**, or it does not ship. One change at a time; failures are recorded,
+  not buried.
+
+**What the framework actually did** (receipts, not a straight-up backtest):
+
+| Verdict | Idea | What happened |
+|---|---|---|
+| ✅ Shipped | Machine-learning gate | The only idea ever to clear the full bar — better selection **and** better dollars on every window: twelve months −$718 → **+$329**, recent quarter +$871 → **+$1,512**, with a smaller worst-case drawdown. |
+| 🔪 Demoted | Time-of-day filter | Looked great on six months and shipped — then a twelve-month re-test showed its edge depended on a single market regime and actually **hurt**, so it was benched to a silent observer. We kill our own darlings. |
+| 🔪 Killed | Curve-fit momentum tune | Best in-sample configuration (+$596) **died out-of-sample** (−$83). Caught by the walk-forward split. |
+| 🔪 Killed | Linear machine-learning gate | It **anti-selected** — the trades it rejected did better than the ones it kept. Caught by a selection metric, not by profit and loss. |
+| 🔪 Killed | Three-model agreement filter | Positive dollars but **negative selection** — the money came from trading less, not trading better. The framework saw through it. |
+
+## The guardrails (why it is safe)
+
+- **Budget capped at real cash.** The allocator syncs to the paper account's actual equity,
+  so it can never try to deploy money that is not there; a drawdown automatically shrinks
+  what it will risk.
+- **Hard limits in code:** a shared eight-thousand-dollar budget, at most three positions at
+  once, roughly one to two thousand dollars per trade sized by conviction, a one-hundred-and-
+  fifty-dollar daily loss cap that halts new entries, and a full flatten at 15:55 New York
+  time (at most one winner may be held overnight).
+- **Every position is protected within seconds** by a trailing stop-loss placed on the
+  exchange; the exit agent can only ever *tighten* that protection, never loosen it.
+- **Survives restarts.** On boot the desk re-adopts any open position, re-attaches its stop,
+  and resumes managing it.
+
+## The automation (a day runs itself)
+
+```
+  before open   Strategist sets the day's stance and budget
+  9:30–15:30    strategies fire → scoreboard → gate → judge → allocator → trades
+  every 10 min  scoreboard re-scores and benches/reinstates strategies
+  13:30         research loop studies the day and messages a summary to the operator
+  15:55         flatten (one overnight winner aside)
+  16:10         Reviewer writes the daily report card
+  ~17:05        nightly machine-learning retrain on data including today
+```
+
+The operator's whole job is to keep it running and read the messages. A daily
+**research loop** (built on a state-machine agent framework) digests the day and proposes
+**at most three evidence-backed changes** — and it is **strictly human-gated**: it never
+applies anything itself; the operator makes every change by hand.
+
+## The human trading terminal (brief)
+
+The real-money side is a fast, safety-first manual terminal: sub-second live charts for any
+United States stock, the full range of order types (market, limit, stop-loss, trailing,
+one-cancels-the-other, and bracket), and order safety treated as a product feature —
+fat-finger blocks, a mandatory plain-language confirmation step, server-side re-checks,
+oversell protection, and a one-click cancel-everything switch. A separate market scanner
+ranks movers across roughly four hundred and seventy stocks. This side is deliberately kept
+simple and untouched by the artificial intelligence.
 
 ---
 
-## Architecture — three planes + a terminal
-
-```
-┌────────────────────────── GO — DATA & EXECUTION PLANE ───────────────────────────────┐
-│ single Alpaca SIP WebSocket → in-memory candle engine (1/5/10m, bad-tick guard)      │
-│    ├─► WebSocket hub → React terminal (sub-second charts, ~120ms fan-out throttle)   │
-│    ├─► DECEPTICON scanner (~470 tickers: RVOL, VWAP, opening-range, volume profiles) │
-│    ├─► signal engine  (5 deterministic strategies × 96-symbol curated universe)      │
-│    │      └─ every signal journaled: features + bracket plan + counterfactual result │
-│    └─► risk officer   (daily loss cap · per-trade risk · concurrency · no overnight) │
-│                                                                                      │
-│ order paths: HUMAN → validated REST → live account (mandatory confirm modal)         │
-│              AI    → paper broker ONLY (market entry + server-side trailing stop)    │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────── PYTHON — RESEARCH & ML PLANE ──────────────────────────────┐
-│ backtester exports labeled datasets (9k+ signals) → LightGBM trained walk-forward    │
-│ (daily retrain, zero lookahead) → predictions replayed through the Go simulator      │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────── LLM — AGENT PLANE (judgment, never math) ──────────────────┐
-│ Entry agent (buy/no-buy on dips) · Exit agent (hold/tighten/exit verbs over a hard   │
-│ stop floor) · Sentiment agent (local Ollama) · Daily reviewer (Opus) → structured    │
-│ reports + evidence-cited change proposals, human-approved                            │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Division of labor (the core design rule):** numbers → models · judgment → LLMs ·
-money → deterministic Go. LLM agents are invoked via forced tool calls (structured JSON
-out, prompt-cached system playbooks), can only choose *direction* or *veto*, and every
-rail (sizing, budget, stops, halts) is enforced in code they cannot override.
-
-## The trading terminal (human, real money)
-
-- **Sub-second live charts** for any US equity — one SIP socket fans out to N browser
-  clients; symbols activate on demand (subscribe → backfill → stream in one round trip).
-- **Order safety as a product feature**: every order passes a fat-finger validator
-  (direction rules — e.g. a buy-limit above market fills instantly and is blocked), a
-  mandatory confirm modal with plain-language warnings, server-side re-validation,
-  oversell/reserved-shares checks, and a notional cap. Kill switch cancels all orders.
-- Market / limit / stop / trailing / OCO / bracket orders, draw-a-price-on-the-chart
-  order entry, live positions marked to streaming prices, realized-P&L analytics
-  reconstructed from fills (average-cost, partial-fill merging).
-- **DECEPTICON scanner**: ~470-ticker event-driven sector scanner (RVOL with learned
-  intraday volume curves, opening-range moves, VWAP, catalyst tags) + whole-market
-  movers with news badges and rate-budgeted LLM "why is it moving" summaries.
-
-## The quant desk (AI, paper money)
-
-- **5 deterministic long-only intraday strategies** (opening-range breakout, VWAP
-  reclaim, momentum continuation, dip-bounce, relative strength) over a curated
-  96-symbol universe (semis/memory, datacenter, software, space, quantum — no penny
-  stocks). ATR-scaled brackets, signal cooldowns, session-time filters.
-- **Event-driven backtester** replays years of SIP 1-minute bars through the *same*
-  detector code the live engine runs: slippage, whole-share sizing, loss-cap halts,
-  in-sample/out-of-sample sweeps, regime filters, and one-command **ML dataset export**
-  (every signal + features + counterfactual outcome).
-- **Walk-forward ML gate** (LightGBM in Python, ridge baseline in Go): daily retrain on
-  prior days only; judged by counterfactual selectivity (accepted-R vs rejected-R), not
-  cherry-picked P&L.
-- **Risk officer**: $150/day loss cap → halt, $40 max risk/trade, 3 concurrent
-  positions, 15:55 ET flatten (optional single-winner overnight cap), kill switch.
-- **Shadow mode**: the live engine journals every signal and its counterfactual result
-  during market hours without placing orders — growing the training set daily and
-  cross-checking the backtester against reality for free.
-
-## Agent governance
-
-A rolling **eval scoreboard** (`GET /api/evals`) scores every strategy on the last 20
-trading days of counterfactual outcomes — mean R and a CUSUM changepoint watchdog — and
-auto-demotes any strategy with proven negative expectancy (it keeps journaling but stops
-trading); the same scoreboard calibrates the LLM entry judge (veto value in R, Brier
-score). A pre-market **Strategist** agent reads the scoreboard + latest review and sets
-the day's posture (normal/cautious/stand-down) and budget within hard clamps, with a
-boot-catch-up so a late start doesn't skip the day. A **LangGraph research loop**
-(`ml/research_loop.py`) runs daily, deterministically digests the day (journals,
-decisions, scoreboard), and asks Opus for at most 3 evidence-cited change proposals —
-**human-gated**: it interrupts before applying anything, and every proposal is applied
-manually by the operator, never auto-applied. Pending batches are served at
-`GET /api/proposals`.
-
-```powershell
-cd backend; go run ./cmd/server                                        # scoreboard recomputes every 10 min
-curl http://localhost:8080/api/evals                                   # rolling strategy scoreboard + judge calibration
-curl http://localhost:8080/api/proposals                                # latest pending research-loop proposals
-PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/research_loop.py  # run the research loop once (human gate on apply)
-```
-
-## Tech stack
+## Technology
 
 | Layer | Choices |
 |---|---|
-| Backend | Go 1.26 · chi · coder/websocket · Alpaca SDK v3 (SIP real-time + trading) |
-| Frontend | React 18 + TypeScript + Vite · TradingView Lightweight Charts |
-| ML | Python 3.11 · LightGBM · walk-forward training/eval · JSONL datasets |
-| LLM agents | Anthropic Messages API (forced tool calls, prompt caching) · local Ollama |
-| Infra | single-binary backend, disk-persisted state, no external DB/queue needed |
+| Backend | Go — one real-time market-data connection, an in-memory candle engine, and a web-socket fan-out to the browser |
+| Frontend | React with TypeScript and the TradingView charting library |
+| Machine learning | Python with the LightGBM library — walk-forward training and evaluation, plain-text datasets |
+| Agents | Anthropic's Claude models (Opus and Haiku) with forced structured output, plus a local model for sentiment |
+| Infrastructure | A single self-contained backend with state saved to disk — no external database or queue |
 
 ## Run it
 
-```powershell
-Copy-Item .env.example backend\.env          # add your Alpaca keys (never committed)
-.\scripts\check-keys.ps1                     # verify keys + SIP entitlement
-.\scripts\run-backend.ps1                    # Go backend :8080
-.\scripts\run-frontend.ps1                   # React UI :5173
+Everything starts with one click:
+
+```
+START-Live-Optimus.bat
 ```
 
-Backtesting & research (read-only market data; bars cached locally):
+(It launches the backend and the browser interface together. Keys live only in a
+server-side environment file and are never committed.)
 
-```powershell
-cd backend
-go run ./cmd/backtest -days 63                                   # full strategy suite
-go run ./cmd/backtest -days 63 -sweep                            # tune IS, validate OOS
-go run ./cmd/backtest -days 126 -dataset data/ml.jsonl           # export ML dataset
-ml/.venv/Scripts/python.exe ml/train_gate.py                     # walk-forward LightGBM
-go run ./cmd/backtest -days 126 -mlpred data/ml_predictions_clf.jsonl  # replay gated
-```
+## Deeper documentation
 
-## Roadmap & research
-
-- [`QUANT_VISION.md`](QUANT_VISION.md) — the full architecture, phase gates, and the
-  running log of what the eval framework promoted or killed (with numbers).
-- [`RESEARCH_BACKLOG.md`](RESEARCH_BACKLOG.md) — the prioritized idea queue (cross-
-  sectional ranking, regime mixture-of-experts, lead-lag graph features, execution
-  alpha, conformal abstention ensembles, …).
-
-## Safety model
-
-Live credentials exist only in a server-side `.env`; the browser never sees them. The AI
-planes hold **paper keys only** — there is no code path from any model or agent to the
-live account. Runtime account data (`backend/data/`) is gitignored.
+- **[QUANT_EXPLAINED.md](QUANT_EXPLAINED.md)** — the whole system in plain words, A to Z,
+  with a one-page workflow diagram.
+- **[QUANT_VISION.md](QUANT_VISION.md)** — the architecture, the phase gates, and the running
+  log of what the evaluation framework promoted or killed, with numbers.
+- **[RESEARCH_BACKLOG.md](RESEARCH_BACKLOG.md)** — the prioritized idea queue and every
+  settled verdict.
 
 ---
 
-*Personal project. Markets are hard; the point is the engineering.*
+*Personal project. Markets are hard; the point is the engineering — a system built to find
+out the truth about its own ideas, and to keep real money and automated experiments strictly
+apart.*
