@@ -21,7 +21,20 @@ type managedPos struct {
 	stopOrderID string
 	stopPrice   float64 // current FIXED stop level (0 while on the initial trailing stop)
 	conf        float64
-	source      string // which pipeline opened it: "dip" | "signal" | "rehydrated"
+	source      string  // which pipeline opened it: "dip" | "signal" | "rehydrated"
+	strategy    string  // detector that opened it (signal pipeline) or "dip"
+	target      float64 // original take-profit the entry set (0 = none, e.g. dip trades)
+	origStop    float64 // original stop the entry set (0 = none)
+}
+
+// EntryContext carries what a position was opened WITH, so the exit agent can manage it
+// knowing the plan (strategy personality + original target) instead of blind. Target/Stop
+// are 0 when the pipeline set none (dip trades ride a trailing stop, no fixed target).
+type EntryContext struct {
+	Source   string
+	Strategy string
+	Target   float64
+	Stop     float64
 }
 
 // Manager owns the live position lifecycle: it places the entry, the deterministic trailing-stop
@@ -65,16 +78,18 @@ func (m *Manager) OpenSymbols() []string {
 	return out
 }
 
-// Open executes an approved dip buy (the dipwatch pipeline's entry point).
+// Open executes an approved dip buy (the dipwatch pipeline's entry point). Dip trades ride
+// the trailing stop with no fixed target, so the entry context carries only the source.
 func (m *Manager) Open(ctx context.Context, de DipEvent, conf, dollars float64) {
-	m.OpenPosition(ctx, de.Symbol, conf, dollars, "dip")
+	m.OpenPosition(ctx, de.Symbol, conf, dollars, EntryContext{Source: "dip", Strategy: "dip"})
 }
 
 // OpenPosition executes an approved buy for any pipeline (dip or signal engine): market
 // entry → confirm fill → place the trailing-stop floor → register → run the Agent 3 loop.
-// Releases the reserved capital on any pre-registration failure. source tags which
-// pipeline opened the trade ("dip" | "signal") so per-pipeline P&L can be measured.
-func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars float64, source string) {
+// Releases the reserved capital on any pre-registration failure. The EntryContext tags the
+// pipeline (so per-pipeline P&L can be measured) and records the entry plan (strategy +
+// original target/stop) so the exit agent can manage the trade with knowledge of its goal.
+func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars float64, ec EntryContext) {
 	registered := false
 	defer func() {
 		if !registered {
@@ -126,7 +141,8 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 	// Initialize the tracked stop level to the trailing floor's starting point so Agent 3's first
 	// tighten can't accidentally LOOSEN protection (and the exit snapshot shows a real stop).
 	pos := &managedPos{symbol: sym, qty: fq, entryPrice: ap, entryTime: time.Now(), stopOrderID: stopID,
-		stopPrice: round2(ap * (1 - m.trailPct/100)), conf: conf, source: source}
+		stopPrice: round2(ap * (1 - m.trailPct/100)), conf: conf,
+		source: ec.Source, strategy: ec.Strategy, target: ec.Target, origStop: ec.Stop}
 	m.mu.Lock()
 	m.open[sym] = pos
 	m.mu.Unlock()
@@ -227,7 +243,7 @@ func (m *Manager) Rehydrate(ctx context.Context) int {
 		}
 
 		pos := &managedPos{symbol: p.Symbol, qty: p.Qty, entryPrice: p.AvgEntry, entryTime: entryTime,
-			stopOrderID: stopID, stopPrice: stopPrice, conf: 0.6, source: "rehydrated"}
+			stopOrderID: stopID, stopPrice: stopPrice, conf: 0.6, source: "rehydrated", strategy: "rehydrated"}
 		m.mu.Lock()
 		m.open[p.Symbol] = pos
 		m.mu.Unlock()
@@ -298,7 +314,7 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 			continue
 		}
 
-		snap := m.eng.exitSnapshot(sym, pos.entryPrice, pos.qty, pos.stopPrice, pos.entryTime)
+		snap := m.eng.exitSnapshot(sym, pos, pos.entryPrice, pos.qty, pos.stopPrice, pos.entryTime)
 		dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		dec, usage, err := m.agent3.Decide(dctx, snap)
 		cancel()

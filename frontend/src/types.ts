@@ -393,6 +393,7 @@ export interface DipScorecard {
   avg_confidence: number;
   dip: SourceStat;
   signal: SourceStat;
+  rehydrated: SourceStat;
   knife_rate: number;
   verdict: string;
 }

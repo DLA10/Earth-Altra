@@ -50,6 +50,7 @@ type DipScorecard struct {
 	AvgConf    float64    `json:"avg_confidence"` // mean conviction on approvals
 	Dip        SourceStat `json:"dip"`            // realized outcomes of dip-pipeline trades
 	Signal     SourceStat `json:"signal"`         // realized outcomes of signal-pipeline trades
+	Rehydrated SourceStat `json:"rehydrated"`     // positions adopted after a restart (unknown origin)
 	KnifeRate  float64    `json:"knife_rate"`     // losing dip trades / dip trades
 	Verdict    string     `json:"verdict"`        // plain-language read for the page
 }
@@ -123,7 +124,7 @@ func (e *Engine) dipScorecard(windowDays int) *DipScorecard {
 
 	sc := &DipScorecard{WindowDays: windowDays}
 	var confSum float64
-	src := map[string]*SourceStat{"dip": &sc.Dip, "signal": &sc.Signal}
+	src := map[string]*SourceStat{"dip": &sc.Dip, "signal": &sc.Signal, "rehydrated": &sc.Rehydrated}
 	for _, n := range names {
 		b, err := os.ReadFile(filepath.Join(dir, "decisions", n))
 		if err != nil {

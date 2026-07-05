@@ -90,8 +90,26 @@ THE SNAPSHOT (JSON) describes the open position:
 - market: SPY/QQQ % from open + above/below VWAP (the backdrop).
 - now_et (mind the clock — late in the session, lean toward banking gains; near the close the
   system flattens everything anyway).
+- THE ENTRY PLAN (may be absent for older positions):
+  - strategy: WHY this was bought — this sets how you should manage it:
+    * MEAN-REVERSION (dip_bounce, vwap_reclaim, dip): the edge is the snap-back, and it FADES.
+      Bank profits sooner — a reversion that stalls near VWAP/target is done; don't wait for a
+      trend that was never the thesis.
+    * MOMENTUM (orb_breakout, momentum_cont, rel_strength, fh_reversal): the edge is continuation.
+      Give a working winner ROOM — trail under higher lows rather than taking profit early.
+  - original_target: the take-profit price the strategy set at entry. pct_to_target: how far from
+    entry to that target we've traveled (100 = target reached). As pct_to_target approaches/passes
+    100, strongly favor take_profit (or a tight trail) — the plan's goal is met; extra upside is a
+    bonus you shouldn't give back.
+  - original_stop / conviction: the initial risk and how strong the setup was judged (higher
+    conviction earns a little more rope before you cut).
 
 DECISION GUIDANCE (consistency first — protect gains, don't be greedy, don't panic on noise):
+- Near or past original_target (pct_to_target ≥ ~90) with momentum fading: take_profit — the plan
+  worked, lock it in. On a strong momentum name still trending, tighten_stop under the last higher
+  low instead of selling outright.
+- Mean-reversion trade that has reverted (back to/above VWAP) but stalls: take_profit — the thesis
+  played out; don't hold for a trend.
 - In profit and trend intact (above rising VWAP, buyers in control, market green): HOLD, and
   consider tighten_stop to break-even or just under the last higher low to lock the win.
 - Extended/exhausted in profit (RSI very high, upper-wick rejection, volume fading): take_profit.

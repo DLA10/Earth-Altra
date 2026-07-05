@@ -186,7 +186,10 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 
 	// 8) Hand off to the manager: entry → stop floor → Agent 3 → flatten. Blocking is
 	// fine — we're already on a dedicated goroutine.
-	t.mgr.OpenPosition(t.appCtx, sym, conf, size, "signal")
+	t.mgr.OpenPosition(t.appCtx, sym, conf, size, EntryContext{
+		Source: "signal", Strategy: sig.Strategy,
+		Target: sig.Suggested.Target, Stop: sig.Suggested.Stop,
+	})
 }
 
 // judgeSnapshot assembles the judge's decision context from the signal.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/client";
-import type { QuantReport, Scoreboard } from "./types";
+import type { QuantReport, Scoreboard, SourceStat } from "./types";
 
 // Quant renders the dip-driven AI team on the Claude paper account: the deterministic detector →
 // Agent 2 (entry, Opus) → shared-budget allocator → Agent 3 (exit, Haiku), plus Agent 4
@@ -113,6 +113,29 @@ export function Quant() {
         )}
         {" · "}deployed <b>${a.deployed.toFixed(0)}</b>
       </div>
+
+      {/* Team P&L by pipeline — which half of the desk is actually earning (rolling window,
+          forward from when source-tagging began). */}
+      {rep.dip_score && (
+        <div className="panel">
+          <div className="panel-title">Team P&L by pipeline (rolling {rep.dip_score.window_days}d)</div>
+          <table className="q-table">
+            <thead>
+              <tr><th>Pipeline</th><th>Trades</th><th>Win rate</th><th>Realized P&L</th><th>Avg / trade</th></tr>
+            </thead>
+            <tbody>
+              <PipelineRow label="Dip pipeline · Agent 2" st={rep.dip_score.dip} money={money} cls={cls} />
+              <PipelineRow label="Signal engine · 6 strategies + ML gate" st={rep.dip_score.signal} money={money} cls={cls} />
+              {rep.dip_score.rehydrated.trades > 0 && (
+                <PipelineRow label="Rehydrated (post-restart, origin unknown)" st={rep.dip_score.rehydrated} money={money} cls={cls} faint />
+              )}
+            </tbody>
+          </table>
+          <div className="attr-verdict muted">
+            The dip watcher (Telegram alerts) itself places no trades — only the dip pipeline (Agent 2) does.
+          </div>
+        </div>
+      )}
 
       {/* The team — models are the ACTUAL configured ones (from the backend), so this can't
           drift out of sync with what's really running. */}
@@ -310,6 +333,26 @@ function Card({ label, value, cls }: { label: string; value: string; cls?: strin
       <div className="q-card-label">{label}</div>
       <div className={`q-card-value ${cls ?? ""}`}>{value}</div>
     </div>
+  );
+}
+
+function PipelineRow({
+  label, st, money, cls, faint,
+}: {
+  label: string;
+  st: SourceStat;
+  money: (v: number) => string;
+  cls: (v: number) => string;
+  faint?: boolean;
+}) {
+  return (
+    <tr className={faint ? "muted" : ""}>
+      <td className="mono-strong">{label}</td>
+      <td>{st.trades}</td>
+      <td>{st.trades > 0 ? `${(st.win_rate * 100).toFixed(0)}%` : "—"}</td>
+      <td className={cls(st.total_pnl)}>{st.trades > 0 ? money(st.total_pnl) : "—"}</td>
+      <td className={cls(st.avg_pnl)}>{st.trades > 0 ? money(st.avg_pnl) : "—"}</td>
+    </tr>
   );
 }
 

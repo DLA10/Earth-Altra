@@ -251,8 +251,10 @@ func (e *Engine) LastClose(sym string) float64 {
 	return snap[len(snap)-1].Close
 }
 
-// exitSnapshot builds the JSON Agent 3 sees for an open position.
-func (e *Engine) exitSnapshot(sym string, entryPrice, qty, curStop float64, entryTime time.Time) string {
+// exitSnapshot builds the JSON Agent 3 sees for an open position. It includes the entry
+// PLAN (strategy + original target/stop) so the exit agent can manage the trade knowing
+// its goal — a mean-reversion dip vs a momentum breakout want different handling.
+func (e *Engine) exitSnapshot(sym string, pos *managedPos, entryPrice, qty, curStop float64, entryTime time.Time) string {
 	cur := e.LastClose(sym)
 	pnlPct := 0.0
 	if entryPrice > 0 {
@@ -283,6 +285,23 @@ func (e *Engine) exitSnapshot(sym string, entryPrice, qty, curStop float64, entr
 		"rvol":               round2(rvol),
 		"market":             e.marketContext(),
 		"bars_1m":            e.recentBars(sym, 10),
+	}
+	// Entry PLAN — so Agent 3 manages with knowledge of intent, not blind.
+	if pos != nil {
+		if pos.strategy != "" {
+			snap["strategy"] = pos.strategy
+		}
+		snap["conviction"] = round2(pos.conf)
+		if pos.origStop > 0 {
+			snap["original_stop"] = round2(pos.origStop)
+		}
+		if pos.target > 0 {
+			snap["original_target"] = round2(pos.target)
+			// How far from entry to the planned exit we've traveled (100% = target hit).
+			if entryPrice > 0 && pos.target > entryPrice {
+				snap["pct_to_target"] = round2((cur - entryPrice) / (pos.target - entryPrice) * 100)
+			}
+		}
 	}
 	b, _ := json.Marshal(snap)
 	return string(b)

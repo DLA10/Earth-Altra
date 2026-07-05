@@ -63,6 +63,9 @@ func TestDipScorecard(t *testing.T) {
 	if sc.Signal.Trades != 2 || sc.Signal.Wins != 2 {
 		t.Errorf("signal trades=%d wins=%d, want 2/2 (must not mix with dip)", sc.Signal.Trades, sc.Signal.Wins)
 	}
+	if sc.Rehydrated.Trades != 1 || sc.Rehydrated.TotalPNL != 100 {
+		t.Errorf("rehydrated trades=%d pnl=%v, want 1/100 (tracked separately, not dropped)", sc.Rehydrated.Trades, sc.Rehydrated.TotalPNL)
+	}
 	if sc.Verdict == "" {
 		t.Error("expected a plain-language verdict")
 	}
