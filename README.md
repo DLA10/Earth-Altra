@@ -8,7 +8,7 @@ and managing them with a team of language-model agents, and holding every idea t
 **evaluation framework whose only job is to kill what does not work before it can ever
 risk money.**
 
-> **The one hard rule:** the human's money is real; **everything the artificial
+> **The one hard rule:** the user's money is real; **everything the artificial
 > intelligence does is on a paper account with its own separate keys.** There is no code
 > path from any model or agent to the real account. Nothing here is financial advice.
 
