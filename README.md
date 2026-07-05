@@ -28,7 +28,7 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
         │                          │                                │
         ▼                          ▼                                ▼
 ┌────────────────┐   ┌──────────────────────────────┐   ┌──────────────────────┐
-│ HUMAN TERMINAL │   │        AI QUANT DESK          │   │   MARKET SCANNER      │
+│ USER TERMINAL  │   │        AI QUANT DESK          │   │   MARKET SCANNER      │
 │  real money    │   │   agentic · fully autonomous  │   │   ~470 stocks         │
 │  manual orders │   │        paper money            │   │   ranks live movers   │
 └────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
@@ -57,7 +57,7 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
    │        │
    │        ▼    after the close
    │  ◆ REVIEWER · Opus — writes the daily report card
-   │  ◆ RESEARCH LOOP · Opus — proposes at most 3 changes, then STOPS for a human
+   │  ◆ RESEARCH LOOP · Opus — proposes at most 3 changes, then STOPS for the user
    │
    │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a
    │    separate messaging dip-alert stream )
@@ -75,7 +75,7 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
 
   Seven agents (◆) orchestrate the desk: a STRATEGIST sets the daily stance, a
   SIGNAL JUDGE and a DIP ENTRY agent decide entries, an EXIT MANAGER runs each
-  position, a SENTIMENT model advises, a REVIEWER grades the day, and a human-gated
+  position, a SENTIMENT model advises, a REVIEWER grades the day, and a user-gated
   RESEARCH LOOP proposes improvements. Rules and a machine-learning model feed them;
   deterministic code holds the money.
 ```
@@ -150,7 +150,7 @@ This is the part most trading projects skip, and the part that matters most here
 - **Rolling scoreboard + automatic benching.** Every ten minutes each strategy's last twenty
   trading days are scored. Any strategy with proven negative expectancy, or a sudden
   performance break caught by a cumulative-sum change detector, is **automatically stopped
-  from trading** — and automatically reinstated when it recovers. No human involved; it
+  from trading** — and automatically reinstated when it recovers. No user involved; it
   benched two strategies on the very first live day.
 - **The agents are graded too.** Each veto by the judge is joined to what the trade actually
   did, measuring whether its vetoes really dodge losers.
@@ -189,18 +189,18 @@ This is the part most trading projects skip, and the part that matters most here
   before open   Strategist sets the day's stance and budget
   9:30–15:30    strategies fire → scoreboard → gate → judge → allocator → trades
   every 10 min  scoreboard re-scores and benches/reinstates strategies
-  13:30         research loop studies the day and messages a summary to the operator
+  13:30         research loop studies the day and messages a summary to the user
   15:55         flatten (one overnight winner aside)
   16:10         Reviewer writes the daily report card
   ~17:05        nightly machine-learning retrain on data including today
 ```
 
-The operator's whole job is to keep it running and read the messages. A daily
+The user's whole job is to keep it running and read the messages. A daily
 **research loop** (built on a state-machine agent framework) digests the day and proposes
-**at most three evidence-backed changes** — and it is **strictly human-gated**: it never
-applies anything itself; the operator makes every change by hand.
+**at most three evidence-backed changes** — and it is **strictly user-gated**: it never
+applies anything itself; the user makes every change by hand.
 
-## The human trading terminal (brief)
+## The user's trading terminal (brief)
 
 The real-money side is a fast, safety-first manual terminal: sub-second live charts for any
 United States stock, the full range of order types (market, limit, stop-loss, trailing,
