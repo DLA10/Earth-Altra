@@ -34,33 +34,33 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
 └────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
                                      │
    ┌─ THE AI DECISION PIPELINE ──────────────────  ◆ = a language-model agent ──┐
-   │  a gate can only REJECT or SHRINK a trade — none can create one
-   │
-   │  ◆ STRATEGIST · Opus — before the open, sets today's stance & budget
-   │        │
-   │        ▼
-   │    six strategies ............. find the setups           · plain rules
-   │        ▼
-   │    strategy scoreboard ........ bench proven losers       · evaluation
-   │        ▼
-   │    machine-learning gate ...... rate each setup's odds    · six models
-   │        ▼
-   │  ◆ SIGNAL JUDGE · Haiku ....... veto red flags, set size  · agent
-   │        ▼
-   │    budget allocator ........... cap at real cash, 3 max  · code
-   │        ▼
-   │  ◆ EXIT MANAGER · Haiku ....... trailing stop · take profit · cut early
-   │        │            ▲
-   │        │      ◆ SENTIMENT · local model — advises
-   │        ▼
-   │    PAPER broker  (simulated account)
-   │        │
-   │        ▼    after the close
-   │  ◆ REVIEWER · Opus — writes the daily report card
-   │  ◆ RESEARCH LOOP · Opus — proposes at most 3 changes, then STOPS for the user
-   │
-   │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a
-   │    separate messaging dip-alert stream )
+   │  a gate can only REJECT or SHRINK a trade — none can create one            │
+   │                                                                            │
+   │  ◆ STRATEGIST · Opus — before the open, sets today's stance & budget       │
+   │        │                                                                   │
+   │        ▼                                                                   │
+   │    six strategies ............. find the setups           · plain rules    │
+   │        ▼                                                                   │
+   │    strategy scoreboard ........ bench proven losers       · evaluation     │
+   │        ▼                                                                   │
+   │    machine-learning gate ...... rate each setup's odds    · six models     │
+   │        ▼                                                                   │
+   │  ◆ SIGNAL JUDGE · Haiku ....... veto red flags, set size  · agent          │
+   │        ▼                                                                   │
+   │    budget allocator ........... cap at real cash, 3 max  · code            │
+   │        ▼                                                                   │
+   │  ◆ EXIT MANAGER · Haiku ....... trailing stop · take profit · cut early    │
+   │        │            ▲                                                      │
+   │        │      ◆ SENTIMENT · local model — advises                          │
+   │        ▼                                                                   │
+   │    PAPER broker  (simulated account)                                       │
+   │        │                                                                   │
+   │        ▼    after the close                                                │
+   │  ◆ REVIEWER · Opus — writes the daily report card                          │
+   │  ◆ RESEARCH LOOP · Opus — proposes up to 3 changes, then STOPS for the user│
+   │                                                                            │
+   │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a │
+   │    separate messaging dip-alert stream )                                   │
    └────────────────────────────────────────────────────────────────────────────┘
       ▲                          ▲                              │
       │ taught by                │ governed by                  │ every action logged
