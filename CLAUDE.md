@@ -198,14 +198,35 @@ START-Live-Optimus.bat      one-click Windows launcher
   below-VWAP pullback ≥ ~0.5×ATR confirmed by a green 5-min candle; 15-min cooldown).
   Read-only observer; its hook also feeds each confirmed dip to the quant pipeline.
 
-- **`quant`** — the AI paper-trading team on a SEPARATE paper account (`PAPER_CLAUDE_*`):
-  dip signal → Agent 2 (entry, forced tool call) → deterministic Allocator (shared budget,
-  slot cap, conviction sizing, quality-ranked funding under contention) → Broker + Manager
-  (market entry, trailing-stop floor, Agent 3 exit loop with ratchet-up-only stops) →
-  Agent 4 sentiment (local Ollama, advisory) → daily Opus review to `data/reviews/`.
-  Universe gated by `data/daily_universe.json` (written pre-market per `Instruction.md`);
-  every decision logged as JSONL to `data/decisions/`. Model proposes, Go disposes.
-  See `QUANT_VISION.md` for where this subsystem is headed.
+- **`quant`** — the AI paper-trading desk on a SEPARATE Alpaca paper account
+  (`PAPER_CLAUDE_*`, base URL hardcoded to `paper-api.alpaca.markets` in `main.go`); there
+  is **no code path from any model to the live keys** (verified: the paper keys are 401'd
+  by the live endpoint). **TWO entry pipelines** share one allocator, one Manager (Agent 3
+  exits), one loss cap, one paper account:
+  - **Signal pipeline (primary)**: `signals` engine → `SignalTrader` gauntlet (see §13.2) →
+    Manager. The validated Tier-1 config: 6 strategies + **ML clf gate** (`clfgate.go`) +
+    LLM judge (`signaljudge.go`) + allocator + Agent 3.
+  - **Dip pipeline (older)**: `dipwatch` → `Engine.OnDip` → **Agent 2** (`agent2.go`, forced
+    tool call, buy/no-buy) → allocator → Manager. **No ML gate.** Kept because the operator's
+    Telegram dip alerts feed it — do NOT disturb `dipwatch`.
+  - **Shared infrastructure**: `Allocator` (`allocator.go` — shared budget **capped at the
+    real paper-account equity** via `Broker.Account()` + `SetEquityCeiling`, synced every
+    60s; 3 slots; conviction full/half sizing; quality-ranked under contention). `Manager`
+    (`manager.go` — market entry → deterministic trailing-stop floor → Agent 3 exit loop →
+    15:55 ET flatten → `Rehydrate` on restart. Positions carry an `EntryContext`
+    (source/strategy/target/stop) so **exits know intent** and **P&L attributes per
+    pipeline**; every close logs a source-tagged `{source,pnl,win,conf,held_min}` outcome).
+    `Broker` (`broker.go` — paper orders + `Reconstruct` P&L + `Account`). Agent 4 sentiment
+    (local Ollama, advisory).
+  - **Governance**: pre-market **Strategist** (`strategist.go` → `daily_universe.json`
+    posture + budget within code clamps; boot catch-up), post-close **Reviewer**
+    (`review.go`, after 16:10 ET → `data/reviews/`), the **eval scoreboard** demotion feed
+    (`internal/evals`), and the daily **research loop** (`ml/research_loop.py`, 13:30 ET →
+    Telegram, human-gated).
+  - Every decision → JSONL in `data/decisions/`. Report at `/api/quant` (`report.go`:
+    alloc, state, exit attribution, **dip scorecard**, **agent roster**, review). Model
+    proposes, Go disposes. See §13 for the live-operations playbook; `QUANT_VISION.md` for
+    the roadmap.
 
 - **`signals`** — the multi-strategy intraday signal engine (QUANT_VISION Phase 1): six
   deterministic detectors (ORB breakout, VWAP reclaim, momentum continuation, dip bounce,
@@ -233,9 +254,14 @@ START-Live-Optimus.bat      one-click Windows launcher
   "why is it moving" stock-news summaries. Disabled-safe; never on the order path.
 
 `main.go` wires it all: load config → verify keys → build engine/hub/managers → backfill →
-seed scanner (goroutine) → start the single SIP stream loop (auto-reconnect, re-backfill on
-reconnect) → quant pipeline + dip watcher → account poller (3s, plus instant refresh on
-trade-update events) → HTTP server.
+seed scanner + **seed signal engine** (daily ATR(14)/avgVol(20), goroutines) → start the
+single SIP stream loop (auto-reconnect, re-backfill on reconnect) → **quant block**
+(build allocator/broker/manager/agents → **clf gate load + parity check** → **equity sync
+(startup + 60s)** → **`Manager.Rehydrate`** → Reviewer loop → SignalTrader wire (+ scoreboard
+`Demoted` closure) → **Strategist** (boot catch-up + daily window) → **nightly retrain**
+goroutine) → **evals scoreboard refresh (every 10 min)** → **research loop** goroutine →
+dip watcher → account poller (2–3s) → HTTP server. The quant block only arms when
+`PAPER_CLAUDE_*` keys are set; each governance piece is independently flag-gated (§9).
 
 ---
 
@@ -246,9 +272,15 @@ stream isn't running while you trade): **Execution · Watchlist · DECEPTICON ·
 Metrics · Paper · Claude**, plus a global **SymbolSearch** (add any tradable US stock to
 Execution/Watchlist) and portal-wide **OrderAlerts** fill animations.
 
-**Paper · Claude page (`Quant.tsx`)** — read-only report of the quant pipeline: shared
-budget, open positions, realized-only P&L, per-exit-reason attribution ("is Agent 3 adding
-value vs a dumb stop?"), and the latest daily review.
+**Paper · Claude page (`Quant.tsx`)** — read-only report of the quant desk (polls
+`/api/quant` + `/api/evals` every 5s). Shows: headline cards (realized/unrealized P&L, win
+rate, open/max, budget free); an **allocator-budget-vs-real-equity** line; a **Team P&L by
+pipeline** panel (dip vs signal vs rehydrated); the **agent roster** (each agent's ACTUAL
+configured model + live/off status — sourced from the backend so it can't drift stale); the
+**Strategy scoreboard** (rolling 20d mean-R, demotions, judge calibration); the **dip-agent
+scorecard** (approve/reject, win rate, knife rate — is Agent 2 catching bounces or knives?);
+per-exit-reason **Agent 3 attribution**; open positions; closed trades; and the latest daily
+review.
 
 **Execution page (`App.tsx` = `ExecutionEngine`)** — the core trading surface.
 - Layout: left **Watchlist** panel · center **Chart + Positions + NewsPanel** · right **OrderPanel**.
@@ -388,6 +420,8 @@ chart's single-symbol subscription.
 | `QUANT_TOD_GATE` | `false` | Enforce the time-of-day gate (default shadow-only: journals verdicts, blocks nothing) |
 | `QUANT_CLF_GATE` | `true` | ML entry gate: nightly LightGBM classifiers reject entries with expected R < 0.03 (fail-open without fresh models) |
 | `QUANT_RETRAIN` | `true` | Auto-run `ml/train_live.py` weekdays ~17:05 ET (+ boot catch-up) to refresh the gate models |
+| `QUANT_STRATEGIST` / `QUANT_STRATEGIST_MODEL` | `true` / `claude-opus-4-8` | Pre-market posture/budget agent |
+| `RESEARCH_LOOP` | `true` | Auto-run `ml/research_loop.py` weekdays 13:30 ET → Telegram (proposals never auto-applied) |
 | `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | `localhost:11434` / `gemma2:2b` | Agent 4 sentiment (local) |
 
 Backfill always loads the full current session day per symbol (no bar-count knob).
@@ -420,7 +454,9 @@ Persistence (all gitignored under `backend/data/`): `execution_symbols.json`,
 | GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills (Metrics) |
 | GET | `/news?symbols&limit` · `/pressure?symbol` | headlines+sentiment / buy-sell pressure |
 | GET | `/readiness` | account trading-readiness gating + market clock |
-| GET | `/quant` | quant pipeline report (Paper · Claude page) |
+| GET | `/quant` | quant desk report: alloc, state, exit attribution, dip scorecard, agent roster, review |
+| GET | `/evals` | eval scoreboard: per-strategy rolling expectancy, demotions, judge calibration (`{enabled:false}` until first compute) |
+| GET | `/proposals` | newest research-loop `proposals_*.json`, or `{pending:[]}` |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
 
 ---
@@ -469,4 +505,129 @@ Checks before considering a change done:
 - **DECEPTICON universe** comes from `EVENT_DRIVEN_WATCHLIST.md` (parsed, not hardcoded);
   editing that file changes the scanner's departments/tickers.
 - This file is documentation **and** agent guidance; keep it accurate when features change.
-```
+
+---
+
+## 13. Live AI quant team — operations & debugging playbook
+
+> **Standing golden rule:** the AI quant desk is **paper only**. Never touch the Execution
+> page or the live order path while debugging it. All fixes here are paper-side.
+>
+> The complete stack (ML clf gate live, equity-aware allocator, source-tagged positions,
+> strategy-aware exit agent, dip scorecard, governance goroutines) is **newer than any
+> long-running binary** — **the backend MUST be restarted** before the first live session so
+> it actually runs this code. When bugs appear during a live test, this section is the map.
+
+### 13.1 Daily clock (all times **America/New_York**)
+
+| Time (ET) | What fires | Where |
+|---|---|---|
+| boot | clf gate load + parity check · equity sync · `Rehydrate` open positions · Strategist boot catch-up | `main.go` quant block |
+| 08:50–09:25 | **Strategist** writes `daily_universe.json` (posture + budget) | `strategist.go` |
+| 09:30–15:30 | signals fire → gauntlet → paper entries (nothing fresh after 15:30) | `signaltrader.go` |
+| every 10 min | **eval scoreboard** recompute → auto-demote/reinstate strategies | `evals.Compute` |
+| every 60 s | allocator budget re-synced to real account equity | `qBroker.Account` |
+| 13:30–13:40 | **research loop** → Telegram (proposals, never auto-applied) | `research_loop.py` |
+| 15:55 | Manager **flattens** everything (one overnight winner ≤ cap may ride) | `manager.go` |
+| ≥16:10 | **Reviewer** writes `data/reviews/<day>.json` | `review.go` |
+| 17:05–17:20 | **nightly retrain** (`train_live.py`) → clf gate hot-reload | `runNightlyRetrain` |
+
+### 13.2 The signal-trader gauntlet (exact order — a skip is logged with its reason)
+
+`OnSignal → handle` (`signaltrader.go`): **(1)** TOD gate (`EntryAllowed`) — only if
+`QUANT_TOD_GATE=true`; **default OFF/shadow** → passes → **(2)** scoreboard demotion
+(`Demoted`) → **(3)** **clf gate** (`Clf.Score` ≥ margin 0.03) → **(4)** session guard
+(reject after 15:30 ET) → **(5)** posture `stand_down` → **(6)** daily loss cap (`risk.Day`)
+→ **(7)** allocator `CanFund` (slot/budget/duplicate — cheap, *before* the LLM call) →
+**(8)** **LLM judge** (veto or approve+conviction) → **(9)** cautious posture requires
+conviction ≥ 0.65 → allocator `Size/Fund` → `Manager.OpenPosition(..., EntryContext{signal})`.
+The **dip pipeline** skips steps 1–3 and 8-as-judge (it uses Agent 2 instead) but shares 4–7
+and the Manager.
+
+### 13.3 Fail-open / fail-closed (so "not trading" is not misdiagnosed as a bug)
+
+- **clf gate**: missing / stale (>7 days) / parity-failed models → **fails OPEN** (trades
+  ungated). "No clf rejections" can be correct — check the startup log and `clf_meta.json`.
+- **LLM judge**: `ANTHROPIC_API_KEY` empty → judge idle, entries proceed at **conviction
+  0.6** (half slice). A judge **error mid-call** → that one trade is **skipped** (fail-closed).
+- **TOD gate**: default OFF → never blocks (shadow journal only).
+- **Strategist**: LLM failure → **rules fallback** (posture from QQQ 20-day-MA state).
+- **Allocator**: if the equity sync fails, `equityCeiling` stays 0 → falls back to the
+  configured budget (no cap). Budget in effect = `min(configured, account equity)`.
+
+### 13.4 Where to look (all under gitignored `backend/data/`)
+
+- `decisions/<day>.jsonl` — **every** agent decision/order/skip/outcome. `agent` ∈
+  {`agent2_entry`, `signal_judge`, `signal_clf`, `signal_trader`, `allocator`,
+  `agent3_exit`, `pipeline`, `strategist`, `review`}. **Skip notes say WHY a signal died.**
+  Close outcomes carry `{source, pnl, win, conf, held_min}`. Each LLM call carries `tokens`.
+- `signals/<day>.jsonl` — every published signal (`type:signal`, with `tod_bucket`/
+  `tod_blocked`) + its counterfactual (`type:outcome`, `r_multiple`, `exit_reason`).
+- `signals/tod_stats.json` — decayed TOD buckets. `models/clf_meta.json` + `clf_<strat>.txt`
+  — trained gate models + parity rows (`models/history/` archives per day).
+- `evals/scoreboard.json` — rolling scoreboard. `evals/proposals_<day>.json` — pending
+  research proposals. `daily_universe.json` — today's live config; `strategist/<day>.json` —
+  its dated archive. `reviews/<day>.json` — daily report card. `btcache/*.gob` — backtest
+  bar cache (~1.2 GB; safe to delete).
+
+### 13.5 Healthy startup log lines to grep
+
+`[clf-gate] loaded 6 strategy models (trained through <day>...) — parity verified` (or a
+`fail-open` line if models are missing/stale) · `quant: allocator synced to paper account
+equity` · `quant: rehydrated N open position(s)` · `signal-trader: LIVE (paper) | judge=… |
+daily loss cap $150 | TOD gate shadow-only | scoreboard demotion active` · `strategist:
+armed …` · `[signals] time-of-day stats loaded: N buckets`.
+
+### 13.6 Common failures → diagnosis
+
+1. **"Barely trading / few trades."** Usually **normal** — signals ≠ trades (3-slot cap +
+   gauntlet; dozens of signals → a handful of trades). Check `decisions` skip reasons.
+   Also rule out: market holiday (no live ticks), `stand_down` posture, loss cap hit,
+   after 15:30 ET, or the clf gate rejecting (`signal_clf` decisions).
+2. **"clf gate not filtering."** Models missing/stale/parity-failed → fail-open. Check the
+   startup log + `clf_meta.json` `last_day` (>7 days = stale). Retrain manually:
+   `PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/train_live.py` (needs
+   `data/ml_dataset_12mo.jsonl` + the `data/signals` journal).
+3. **"Parity failed" in the log.** A LightGBM format change (the trainer patches the v4
+   header to v3 for the `leaves` reader). The gate refuses the model and fails open (safe) —
+   retrain; if it persists, the `leaves` reader and LightGBM version have diverged.
+4. **Stale morning config.** `daily_universe.json` `date` must equal today (`freshFor`).
+   Boot catch-up only fires when started 08:00–15:00 ET. Delete a stale file to force
+   `$8000/$2000/3` defaults.
+5. **Budget looks wrong.** `min(configured, account equity)`. Check `/api/quant` →
+   `alloc.{budget, configured_max, account_equity}`. A stale `daily_universe.json` can pin
+   the configured budget.
+6. **Agents idle.** `ANTHROPIC_API_KEY` empty → judge/Strategist/Reviewer fall back
+   (§13.3). Agent 4 needs a local Ollama server.
+7. **Orphaned positions after a restart.** `Rehydrate` should re-adopt + re-stop them —
+   check the startup log; it requires the paper broker enabled.
+
+### 13.7 Kill switches for isolation (`.env`, then restart)
+
+`QUANT_SIGNALS_LIVE=false` (signal engine journals only) · `QUANT_CLF_GATE=false` (drop the
+ML gate) · `QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` (re-enable TOD) ·
+`QUANT_STRATEGIST=false` · `RESEARCH_LOOP=false` · `QUANT_LIVE=false` (dip pipeline shadow).
+
+### 13.8 Verify from the shell
+
+`curl localhost:8080/api/quant` (report incl. dip scorecard + agent roster) ·
+`curl localhost:8080/api/evals` (scoreboard) · `curl localhost:8080/api/proposals`.
+Backend bar before any commit (from `backend/`):
+`"C:\Program Files\Go\bin\go" build ./... && go vet ./... && go test ./...`; frontend:
+`npx tsc --noEmit && npm run build`.
+
+### 13.9 ⚠ Timezone gotcha (this has burned a past session)
+
+**The operator's local wall clock runs AHEAD of New York.** Before concluding "the market is
+closed" / "the Strategist didn't run" / "nothing traded", **convert to ET** and check against
+§13.1 — do NOT reason from the local clock. The engine can be live and journaling while the
+local time makes it look like off-hours. Holidays are also not modeled: on a US market
+holiday there are no live ticks (blank prices, backfilled charts) — expected, not a bug.
+
+### 13.10 Two-pipeline reminder
+
+There are **two entry agents**: **Agent 2** (dip pipeline, from Telegram dip alerts, no ML
+gate) and the **Signal Judge** (signal pipeline, behind the clf gate). They are different
+code, different prompts, both Haiku, both feeding the same allocator + Manager + Agent 3 +
+paper account. Attribute P&L per pipeline via the source tags (`decisions` outcomes and the
+`/api/quant` `dip_score`).
