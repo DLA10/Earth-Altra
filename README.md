@@ -1,4 +1,4 @@
-# Earth-Altra — An Autonomous Artificial-Intelligence Quant Trading Desk
+# Earth-Altra — Real-Time Trading Terminal & Agentic Quant System with ML pipelines
 
 A trading platform with two halves. A user trades **real money** through a fast,
 safety-first terminal; on top of it runs an **autonomous artificial-intelligence quant
