@@ -8,8 +8,7 @@ and managing them with a team of language-model agents, and holding every idea t
 **evaluation framework whose only job is to kill what does not work before it can ever
 risk money.**
 
-> **The one hard rule:** the user's money is real; **everything the artificial
-> intelligence does is on a paper account with its own separate keys.** There is no code
+> **The one hard rule:** the user's money is real; **Everything the AI Agents do is on a paper account with its own separate keys.** There is no code
 > path from any model or agent to the real account. Nothing here is financial advice.
 
 ---
@@ -22,56 +21,56 @@ teaches it, an evaluation plane that governs it, and a journal that records ever
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║               ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                 ║
-║        live candle engine · in memory · sub-second · one feed, fanned out      ║
+║               ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                ║
+║        live candle engine · in memory · sub-second · one feed, fanned out    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
         │                          │                                │
         ▼                          ▼                                ▼
 ┌────────────────┐   ┌──────────────────────────────┐   ┌──────────────────────┐
-│ USER TERMINAL  │   │        AI QUANT DESK          │   │   MARKET SCANNER      │
-│  real money    │   │   agentic · fully autonomous  │   │   ~470 stocks         │
-│  manual orders │   │        paper money            │   │   ranks live movers   │
+│ USER TERMINAL  │   │        AI QUANT DESK         │   │   MARKET SCANNER     │
+│  real money    │   │   agentic · fully autonomous │   │   ~470 stocks        │
+│  manual orders │   │        paper money           │   │   ranks live movers  │
 └────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
                                      │
    ┌─ THE AI DECISION PIPELINE ──────────────────  ◆ = a language-model agent ──┐
-   │  a gate can only REJECT or SHRINK a trade — none can create one            │
-   │                                                                            │
+   │  a gate can only REJECT or SHRINK a trade — none can create one             │
+   │                                                                             │
    │  ◆ STRATEGIST · Opus — before the open, sets today's stance & budget       │
-   │        │                                                                   │
-   │        ▼                                                                   │
-   │    six strategies ............. find the setups           · plain rules    │
-   │        ▼                                                                   │
-   │    strategy scoreboard ........ bench proven losers       · evaluation     │
-   │        ▼                                                                   │
-   │    machine-learning gate ...... rate each setup's odds    · six models     │
-   │        ▼                                                                   │
+   │        │                                                                    │
+   │        ▼                                                                    │
+   │    six strategies ............. find the setups           · plain rules     │
+   │        ▼                                                                    │
+   │    strategy scoreboard ........ bench proven losers       · evaluation      │
+   │        ▼                                                                    │
+   │    machine-learning gate ...... rate each setup's odds    · six models      │
+   │        ▼                                                                    │
    │  ◆ SIGNAL JUDGE · Haiku ....... veto red flags, set size  · agent          │
-   │        ▼                                                                   │
-   │    budget allocator ........... cap at real cash, 3 max  · code            │
-   │        ▼                                                                   │
+   │        ▼                                                                    │
+   │    budget allocator ........... cap at real cash, 3 max  · code             │
+   │        ▼                                                                    │
    │  ◆ EXIT MANAGER · Haiku ....... trailing stop · take profit · cut early    │
-   │        │            ▲                                                      │
+   │        │            ▲                                                       │
    │        │      ◆ SENTIMENT · local model — advises                          │
-   │        ▼                                                                   │
-   │    PAPER broker  (simulated account)                                       │
-   │        │                                                                   │
-   │        ▼    after the close                                                │
+   │        ▼                                                                    │
+   │    PAPER broker  (simulated account)                                        │
+   │        │                                                                    │
+   │        ▼    after the close                                                 │
    │  ◆ REVIEWER · Opus — writes the daily report card                          │
-   │  ◆ RESEARCH LOOP · Opus — proposes up to 3 changes, then STOPS for the user│
-   │                                                                            │
+   │  ◆ RESEARCH LOOP · Opus — proposes up to 3 changes, then STOPS for the use │
+   │                                                                             │
    │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a │
-   │    separate messaging dip-alert stream )                                   │
-   └────────────────────────────────────────────────────────────────────────────┘
+   │    separate messaging dip-alert stream )                                    │
+   └─────────────────────────────────────────────────────────────────────────────┘
       ▲                          ▲                              │
       │ taught by                │ governed by                  │ every action logged
       │                          │                              ▼
-┌───────────────────┐   ┌──────────────────────┐   ┌───────────────────────────┐
-│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL         │
-│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the       │
+┌───────────────────┐   ┌──────────────────────┐   ┌─────────────────────────────┐
+│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL          │
+│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the        │
 │ nightly retrain · │   │ automatic demotion,  │   │   outcome it WOULD have had │
 │ walk-forward ·    │   │ change-point alarm,  │   │   (taken or not) →          │
-│ backtester        │   │ judge calibration    │   │   a self-labelling dataset │
-└───────────────────┘   └──────────────────────┘   └───────────────────────────┘
+│ backtester        │   │ judge calibration    │   │   a self-labelling dataset  │
+└───────────────────┘   └──────────────────────┘   └─────────────────────────────┘
 
   Seven agents (◆) orchestrate the desk: a STRATEGIST sets the daily stance, a
   SIGNAL JUDGE and a DIP ENTRY agent decide entries, an EXIT MANAGER runs each
