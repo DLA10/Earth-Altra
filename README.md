@@ -11,6 +11,7 @@ risk money.**
 > **The one hard rule:** the user's money is real; **Everything the AI Agents do is on a paper account with its own separate keys.** There is no code
 > path from any model or agent to the real account. Nothing here is financial advice.
 
+Personal project. Markets are hard; the point is the engineering — a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
 ---
 
 ## Architecture at a glance
