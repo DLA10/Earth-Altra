@@ -1,4 +1,4 @@
-# Earth-Altra — Real-Time Trading Terminal & Agentic Quant System with ML pipelines
+# Earth-Altra: Real-Time Trading Terminal & Agentic Quant System with ML pipelines
 
 A trading platform with two halves. A user trades **real money** through a fast,
 safety-first terminal; on top of it runs an **autonomous artificial-intelligence quant
@@ -11,7 +11,7 @@ risk money.**
 > **The one hard rule:** the user's money is real; **Everything the AI Agents do is on a paper account with its own separate keys.** There is no code
 > path from any model or agent to the real account. Nothing here is financial advice.
 
-## Personal project. Markets are hard; the point is the engineering — a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
+## Personal project. Markets are hard. The point is the engineering, a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
 ---
 
 ## Architecture at a glance
