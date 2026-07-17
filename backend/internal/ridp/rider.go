@@ -58,12 +58,19 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 			continue
 		}
 		bars := m.engine.Snapshot(sym, 1)
-		if len(bars) < 35 {
+		if len(bars) < 15 {
 			continue
 		}
 		var open, cumVol, pv, pvOld, volOld float64
 		first := true
+		// Rising-VWAP reference point: normally VWAP 30 minutes ago, but early in the
+		// session that lands BEFORE the open (zero volume → every symbol skipped, which
+		// silently killed the 09:45 window). Before 10:10 compare against the first half
+		// of the session so far instead — "rising" = VWAP now above its early-session level.
 		cut := now.Unix() - 30*60
+		if half := sessionStart + (now.Unix()-sessionStart)/2; cut < half {
+			cut = half
+		}
 		for _, b := range bars {
 			if b.Time < sessionStart || b.Volume <= 0 {
 				continue
