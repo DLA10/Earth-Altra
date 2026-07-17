@@ -152,7 +152,7 @@ export function Ridp() {
         </div>
         {allOpen.length === 0 ? (
           <p className="muted">
-            Nothing open. RIDER hunts 10:00–14:30 ET; DIPPER buys turned dips at the open; REVERTER buys −1.5σ dips 09:45–15:45.
+            Nothing open. RIDER hunts 09:45–14:30 ET (ranked, uncapped); DIPPER buys turned dips at the open; REVERTER buys −1.5σ dips 09:45–15:45.
           </p>
         ) : (
           <table className="q-table">
@@ -190,7 +190,7 @@ export function Ridp() {
       <div className="quant-columns">
         <StratPanel name="🏇 RIDER (intraday momentum)" st={rep.rider}
           open={openFor("rider")} openUnreal={unrealFor("rider")}
-          note="+0.7% from open · above rising VWAP · 1.5× volume · QQQ not falling → trail 3.5%→2% → flat 15:55 (throughput mode)" />
+          note="From 09:45 ET (strict gates till 10:00) · ranked by gain×volume · uncapped seats · re-board above prior peak (max 3/day) → trail 3.5%→2% → flat 15:55" />
         <StratPanel name="⛰ DIPPER (multi-day dip turn)" st={rep.dipper}
           open={openFor("dipper")} openUnreal={unrealFor("dipper")}
           note="2+ red days or −4%/5d → buy the turn (prior-high close or +1.5% close on volume) → 2×ATR hard stop → trail 2.5×ATR" />

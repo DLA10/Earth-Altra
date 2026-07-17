@@ -29,11 +29,13 @@ The pre-expansion universe is snapshotted at `QUANT_UNIVERSE.baseline-2026-07-16
 
 | Dial | Original | Now | Env override (set to original to roll back) |
 |---|---|---|---|
-| Gain from open | ≥ 1.0% | ≥ 0.7% | `RIDP_RIDER_GAIN_MIN=0.01` |
-| Time-of-day RVOL | ≥ 2.0× | ≥ 1.5× | `RIDP_RIDER_RVOL_MIN=2.0` |
+| Gain from open | ≥ 1.0% | ≥ 0.7% after 10:00 ET; **the original ≥1.0% applies 09:45–10:00** (early-strict ramp) | `RIDP_RIDER_GAIN_MIN=0.01` |
+| Time-of-day RVOL | ≥ 2.0× | ≥ 1.5× after 10:00 ET; **original 2.0× applies 09:45–10:00** | `RIDP_RIDER_RVOL_MIN=2.0` |
 | QQQ gate | strictly green (≥ open) | ≥ −0.15% from open | `RIDP_RIDER_QQQ_MIN=0` |
-| Entry window start | 10:30 ET (min 60) | 10:00 ET (min 30) | `RIDP_RIDER_START_MIN=60` |
-| Slots | 2 | 3 | `RIDP_RIDER_SLOTS=2` |
+| Entry window start | 10:30 ET (min 60) | **09:45 ET (min 15)** — the 07-17 sector wave ran 09:45–10:00 and RIDER missed it | `RIDP_RIDER_START_MIN=60` |
+| Slots | 2 | **uncapped** (budget-only; operator 07-17: no seat limit on paper — the wave had 10 qualifiers for 3 seats) | `RIDP_RIDER_SLOTS=2` |
+| Seat allocation | first-scanned wins | **ranked**: candidates sorted by gain×rvol, strongest funded first (07-17: TFC took a seat by scan order, ended the only loser) | code (no dial) |
+| Re-entry | one entry per symbol per day | up to **3 entries/day**, re-board only ABOVE the previous run's peak (a new high proves the shakeout was noise) | `RIDP_RIDER_MAX_ENTRIES=1` |
 
 Unchanged: $1,500 slice, 3.5%→2% trail, tighten at +3%, last entry 14:30, flat 15:55.
 

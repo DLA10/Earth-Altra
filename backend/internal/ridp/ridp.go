@@ -67,11 +67,14 @@ const (
 // overridable via env — set the env var to the original value to roll back per-dial
 // without a code change.
 var (
-	riderGainMin  = envDial("RIDP_RIDER_GAIN_MIN", 0.007)   // original 0.01  (+1% from open)
-	riderRVOLMin  = envDial("RIDP_RIDER_RVOL_MIN", 1.5)     // original 2.0   (2x time-of-day volume)
-	riderQQQMin   = envDial("RIDP_RIDER_QQQ_MIN", -0.0015)  // original 0.0   (QQQ strictly green)
-	riderStartMin = envDialInt("RIDP_RIDER_START_MIN", 30)  // original 60    (entries from 10:30 ET)
-	riderSlots    = envDialInt("RIDP_RIDER_SLOTS", 3)       // original 2
+	riderGainMin  = envDial("RIDP_RIDER_GAIN_MIN", 0.007)  // original 0.01  (+1% from open)
+	riderRVOLMin  = envDial("RIDP_RIDER_RVOL_MIN", 1.5)    // original 2.0   (2x time-of-day volume)
+	riderQQQMin   = envDial("RIDP_RIDER_QQQ_MIN", -0.0015) // original 0.0   (QQQ strictly green)
+	riderStartMin = envDialInt("RIDP_RIDER_START_MIN", 15) // original 60 (10:30), throughput 30; 15 = 09:45 ET — the 07-17 sector wave ran 09:45–10:00 and RIDER missed it. The first 15 min of the window demand the ORIGINAL strict gates (ramp in rider.go)
+	riderSlots    = envDialInt("RIDP_RIDER_SLOTS", 1<<30)  // original 2, throughput 3; now UNCAPPED on paper (operator 07-17: budget is the only limit — 07-17 wave had 10 qualifiers for 3 seats)
+	// Noise re-entry (operator 07-17): a rider shaken out by a wiggle may re-board, but
+	// ONLY above the peak of its previous run (proof the drop was noise, trend intact).
+	riderMaxEntries = envDialInt("RIDP_RIDER_MAX_ENTRIES", 3) // entries per symbol per day (1 original + 2 re-boards)
 	dipperRedDays = envDialInt("RIDP_DIPPER_RED_DAYS", 2)   // original 3     (consecutive red closes)
 	dipperDrop5d  = envDial("RIDP_DIPPER_DROP_5D", -0.04)   // original -0.06 (5-session drop)
 	dipperTurnPct = envDial("RIDP_DIPPER_TURN_PCT", 0.015)  // original: none (alt turn trigger: close > prev close +1.5% on above-avg volume; 0 disables)
@@ -184,6 +187,10 @@ type Manager struct {
 	lastExit     map[string]time.Time // symbol -> last exit time (re-entry cooldown)
 	lastGhostFix map[string]time.Time // symbol -> last reconcile attempt (throttle)
 	booksBad     bool                 // state.json corrupt: reconcile stands down (alarm only)
+
+	// RIDER noise re-entry state (day-scoped, reset at rollover):
+	riderCount    map[string]int     // entries taken per symbol today
+	riderExitPeak map[string]float64 // peak of the previous rider run (re-entry bar)
 }
 
 // DailyBar is the minimal daily bar the manager needs (decoupled from the alpaca pkg).
@@ -340,6 +347,7 @@ func New(broker *quant.Broker, engine *candles.Engine, symbols []string, etz *ti
 		open: map[string]*Position{}, daily: map[string]*dailyCtx{}, entered: map[string]bool{},
 		volProf: map[string][]float64{}, lastSkip: map[string]time.Time{},
 		lastExit: map[string]time.Time{}, lastGhostFix: map[string]time.Time{},
+		riderCount: map[string]int{}, riderExitPeak: map[string]float64{},
 	}
 	_ = os.MkdirAll(m.dataDir, 0o755)
 	m.loadState()
@@ -388,6 +396,8 @@ func (m *Manager) tick() {
 	if day != m.dayKey {
 		m.dayKey = day
 		m.entered = map[string]bool{}
+		m.riderCount = map[string]int{}
+		m.riderExitPeak = map[string]float64{}
 	}
 	needDaily := m.dailyDay != day && now.Hour()*60+now.Minute() >= 9*60+20
 	m.mu.Unlock()
@@ -804,6 +814,11 @@ func (m *Manager) finalize(pos *Position, exitPx float64, reason string) {
 	delete(m.open, pos.Symbol)
 	m.closed = append(m.closed, tr)
 	m.lastExit[pos.Symbol] = time.Now() // re-entry cooldown: never buy into our own in-flight exit
+	if pos.Strategy == "rider" {
+		// Noise re-entry bar: RIDER may re-board today ONLY above this run's peak —
+		// a new high proves the shakeout was noise and the trend is intact.
+		m.riderExitPeak[pos.Symbol] = pos.Peak
+	}
 	m.mu.Unlock()
 	m.saveState()
 	m.appendTrade(tr)

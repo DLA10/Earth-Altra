@@ -2,12 +2,17 @@ package ridp
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
-// scanRiderEntries looks for the day's leaders: +1% from the open, above a rising VWAP,
-// cumulative volume >= 2x normal for this time of day, QQQ green. One entry per symbol
-// per day; funded at a fixed $1,500 slice through the allocator.
+// scanRiderEntries looks for the day's leaders: above a rising VWAP on outsized volume,
+// QQQ not falling. Since 2026-07-17 (operator directives): entries from 09:45 ET with an
+// EARLY-STRICT ramp (the original +1%/2x gates until 10:00, throughput gates after);
+// candidates are RANKED by momentum quality (gain x rvol) and funded strongest-first;
+// seats are budget-limited only (no slot cap on paper money); a shaken-out symbol may
+// RE-BOARD up to riderMaxEntries/day, but only above its previous run's peak — a new
+// high proves the drop was minute noise, not a reversal.
 func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 	// Throughput mode: "QQQ not falling" (>= riderQQQMin from open, default -0.15%)
 	// instead of the original strictly-green gate, which disabled RIDER ~half of all days.
@@ -18,19 +23,38 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 	if !qqqOK {
 		return
 	}
+	// Early-strict ramp: in the first 15 minutes of the window (09:45-10:00 ET) demand
+	// the ORIGINAL validated gates — early birds must be loud (real sector waves are
+	// never marginal, and the VWAP is thin that early). Throughput gates after 10:00.
+	gainMin, rvolMin := riderGainMin, riderRVOLMin
+	if sessionMin < 30 {
+		if gainMin < 0.01 {
+			gainMin = 0.01
+		}
+		if rvolMin < 2.0 {
+			rvolMin = 2.0
+		}
+	}
+	type cand struct {
+		sym              string
+		last, gain, rvol float64
+		qty              float64
+	}
 	sessionStart := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, m.etz).Unix()
+	var cands []cand
 	for _, sym := range m.symbols {
 		if sym == "QQQ" || sym == "SPY" || sym == "SMH" {
 			continue
 		}
 		m.mu.Lock()
 		_, held := m.open[sym]
-		done := m.entered[sym]
+		cnt := m.riderCount[sym]
+		exitPeak := m.riderExitPeak[sym]
 		d := m.daily[sym]
 		ghostQty := m.livePos[sym] // untracked shares present = don't pyramid onto a leak
 		cooling := time.Since(m.lastExit[sym]) < 90*time.Second
 		m.mu.Unlock()
-		if held || done || cooling || ghostQty >= 1 || d == nil || d.AvgVol <= 0 {
+		if held || cooling || ghostQty >= 1 || d == nil || d.AvgVol <= 0 || cnt >= riderMaxEntries {
 			continue
 		}
 		bars := m.engine.Snapshot(sym, 1)
@@ -60,9 +84,14 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 			continue
 		}
 		last := bars[len(bars)-1].Close
+		// Noise re-entry bar: after a shakeout, only re-board ABOVE the previous run's
+		// peak. Below it, the "recovery" hasn't proven anything yet.
+		if cnt >= 1 && (exitPeak <= 0 || last <= exitPeak) {
+			continue
+		}
 		vwap := pv / cumVol
 		vwapOld := pvOld / volOld
-		if last/open-1 < riderGainMin || last <= vwap || vwap <= vwapOld {
+		if last/open-1 < gainMin || last <= vwap || vwap <= vwapOld {
 			continue
 		}
 		// "2x normal for THIS time of day": compare cumulative volume to what a normal day
@@ -71,7 +100,7 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 		// profile lands. The old flat sessionMin/390 over-counted late-morning volume.
 		frac := m.expectedVolFrac(sym, sessionMin)
 		rvol := cumVol / (d.AvgVol * frac)
-		if rvol < riderRVOLMin {
+		if rvol < rvolMin {
 			continue
 		}
 		qty := float64(int(riderSlice / last))
@@ -80,21 +109,41 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 			m.markEntered(sym)
 			continue
 		}
-		ok, why := m.alloc("rider", qty*last)
+		cands = append(cands, cand{sym: sym, last: last, gain: last/open - 1, rvol: rvol, qty: qty})
+	}
+	if len(cands) == 0 {
+		return
+	}
+	// RANK: strongest momentum first (gain x rvol), so budget contention favors the
+	// leaders instead of whichever symbol was scanned first. (2026-07-17: TFC took a
+	// seat by scan order while MU/SNDK/ARM at +4-5% were skipped "no free rider slot";
+	// TFC ended the book's only loser.)
+	sort.Slice(cands, func(i, j int) bool { return cands[i].gain*cands[i].rvol > cands[j].gain*cands[j].rvol })
+	for _, c := range cands {
+		ok, why := m.alloc("rider", c.qty*c.last)
 		if !ok {
-			m.journalSkip("rider", sym, why)
-			continue // do NOT mark entered — a slot may free up later today
+			m.journalSkip("rider", c.sym, why)
+			continue // do NOT mark entered — budget may free up later today
 		}
-		m.markEntered(sym)
-		m.journal("rider", "signal", sym,
-			fmt.Sprintf("+%.1f%% from open, rvol %.1f, above rising VWAP, QQQ ok", (last/open-1)*100, rvol))
-		m.openPosition("rider", sym, qty, 0, 0, now)
+		m.markEntered(c.sym)
+		m.mu.Lock()
+		nth := m.riderCount[c.sym]
+		m.mu.Unlock()
+		tag := ""
+		if nth > 1 {
+			tag = fmt.Sprintf(" — RE-BOARD #%d above prior peak", nth)
+		}
+		m.journal("rider", "signal", c.sym,
+			fmt.Sprintf("+%.1f%% from open, rvol %.1f, above rising VWAP, QQQ ok (rank %.2f)%s",
+				c.gain*100, c.rvol, c.gain*c.rvol*100, tag))
+		m.openPosition("rider", c.sym, c.qty, 0, 0, now)
 	}
 }
 
 func (m *Manager) markEntered(sym string) {
 	m.mu.Lock()
 	m.entered[sym] = true
+	m.riderCount[sym]++
 	m.mu.Unlock()
 }
 
