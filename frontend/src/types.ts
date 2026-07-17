@@ -527,12 +527,19 @@ export interface RidpStratStats {
   avg_pnl: number;
   today_pnl: number;
 }
+export interface RidpGhost {
+  symbol: string;
+  qty: number; // untracked shares (account − tracked)
+  last: number;
+}
 export interface RidpReport {
   enabled: boolean;
   live: boolean;
   account_equity: number;
   account_last_equity: number; // Alpaca: equity at prior close
   account_day_pnl: number; // Alpaca: equity − last_equity (broker truth)
+  ghosts?: RidpGhost[]; // on the account but tracked by no strategy (auto-flattened in-session)
+  books_bad?: boolean; // state.json corrupt — reconcile standing down
   buying_power: number;
   deployed: number;
   open: RidpPosition[] | null;

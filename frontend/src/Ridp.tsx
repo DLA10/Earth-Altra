@@ -109,6 +109,37 @@ export function Ridp() {
         <Card label="Mode" value={rep.live ? "LIVE (paper)" : "SHADOW"} tone={rep.live ? "pos" : ""} />
       </div>
 
+      {/* Broker-truth cross-check: shares Alpaca says we hold that NO strategy tracks.
+          These are leaks (crossed entry/exit orders) — auto-flattened during the session. */}
+      {rep.books_bad && (
+        <div className="panel" style={{ borderColor: "#e5484d" }}>
+          <div className="panel-title neg">⚠ Desk books unreadable (state.json corrupt)</div>
+          <p className="muted">Ghost auto-flatten is standing down for safety. Fix or remove backend/data/ridp/state.json and restart.</p>
+        </div>
+      )}
+      {(rep.ghosts ?? []).length > 0 && (
+        <div className="panel" style={{ borderColor: "#e5a13d" }}>
+          <div className="panel-title">⚠ On the account but NOT tracked ({(rep.ghosts ?? []).length})</div>
+          <p className="muted" style={{ fontSize: "0.85em" }}>
+            Alpaca holds these shares but no strategy claims them (leaked by a crossed entry/exit).
+            They are <b>unmanaged and unprotected</b>; the desk auto-sells them during market hours.
+          </p>
+          <table className="q-table">
+            <thead><tr><th>Symbol</th><th>Untracked qty</th><th>Last</th><th>Approx value</th></tr></thead>
+            <tbody>
+              {(rep.ghosts ?? []).map((g) => (
+                <tr key={g.symbol}>
+                  <td><b>{g.symbol}</b></td>
+                  <td>{g.qty}</td>
+                  <td>{g.last > 0 ? `$${g.last.toFixed(2)}` : "—"}</td>
+                  <td>{g.last > 0 ? `$${(g.qty * g.last).toFixed(0)}` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Open positions — the live table; P&L cells tick sub-second via the quote stream */}
       <div className="panel">
         <div className="panel-title">Open positions ({(rep.open ?? []).length})</div>

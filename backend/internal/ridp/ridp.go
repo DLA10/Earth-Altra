@@ -178,6 +178,7 @@ type Manager struct {
 	// market hours, throttled per symbol.
 	lastExit     map[string]time.Time // symbol -> last exit time (re-entry cooldown)
 	lastGhostFix map[string]time.Time // symbol -> last reconcile attempt (throttle)
+	booksBad     bool                 // state.json corrupt: reconcile stands down (alarm only)
 }
 
 // DailyBar is the minimal daily bar the manager needs (decoupled from the alpaca pkg).
@@ -389,11 +390,19 @@ func (m *Manager) tick() {
 		m.refreshDaily()
 	}
 
-	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
-		return
-	}
 	mins := now.Hour()*60 + now.Minute()
-	if mins < 9*60+30 || mins >= 16*60 {
+	offHours := now.Weekday() == time.Saturday || now.Weekday() == time.Sunday ||
+		mins < 9*60+30 || mins >= 16*60
+	if offHours {
+		// Keep the broker-truth snapshot fresh at a slow cadence even off-hours, so the
+		// report's ghost view stays honest around the clock (reconcile itself only ever
+		// acts during the session, below).
+		m.mu.Lock()
+		stale := m.livePosAt.IsZero() || time.Since(m.livePosAt) > time.Minute
+		m.mu.Unlock()
+		if stale {
+			m.refreshLivePositions()
+		}
 		return
 	}
 	sessionMin := mins - (9*60 + 30)
@@ -451,6 +460,10 @@ func (m *Manager) refreshLivePositions() {
 // positions sat overnight with no stops and no owner.
 func (m *Manager) reconcileGhosts() {
 	m.mu.Lock()
+	if m.booksBad {
+		m.mu.Unlock()
+		return // books unreliable (corrupt state.json): never sell on a guess
+	}
 	if m.livePosAt.IsZero() || time.Since(m.livePosAt) > 45*time.Second {
 		m.mu.Unlock()
 		return // no fresh truth — don't act on guesses
@@ -844,15 +857,30 @@ func (m *Manager) saveState() {
 	m.mu.Lock()
 	b, _ := json.MarshalIndent(m.open, "", " ")
 	m.mu.Unlock()
-	_ = os.WriteFile(m.statePath(), b, 0o644)
+	// ATOMIC write (temp + rename): a crash mid-write must never corrupt the books —
+	// the ghost reconciler SELLS anything the books don't claim, so corrupt books that
+	// load empty would flatten legitimate overnight positions (e.g. DIPPER's).
+	tmp := m.statePath() + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		log.Printf("ridp: state save failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, m.statePath()); err != nil {
+		log.Printf("ridp: state rename failed: %v", err)
+	}
 }
 
 func (m *Manager) loadState() {
 	b, err := os.ReadFile(m.statePath())
 	if err != nil {
-		return
+		return // no file = genuinely empty books (fresh start) — reconcile may act
 	}
-	_ = json.Unmarshal(b, &m.open)
+	if err := json.Unmarshal(b, &m.open); err != nil {
+		// File EXISTS but is unreadable: the books are UNRELIABLE, not empty. Fail safe:
+		// the ghost reconciler must not sell anything it can't prove is untracked.
+		m.booksBad = true
+		log.Printf("ridp: ⚠ CRITICAL: state.json is corrupt (%v) — ghost reconcile DISABLED until the file is fixed or removed; positions on the account are NOT being auto-flattened", err)
+	}
 	if m.open == nil {
 		m.open = map[string]*Position{}
 	}
@@ -1015,6 +1043,16 @@ type Report struct {
 	Symbols      int            `json:"universe_size"`
 	ReverterOpen []PositionView `json:"reverter_open"` // REVERTER shadow virtual positions
 	Reverter     StratStats     `json:"reverter"`      // REVERTER shadow realized stats
+	Ghosts       []GhostView    `json:"ghosts"`        // on the ACCOUNT but tracked by no strategy
+	BooksBad     bool           `json:"books_bad"`     // state.json corrupt — reconcile standing down
+}
+
+// GhostView is an account holding no strategy claims — straight from the Alpaca
+// snapshot, so the page can never show "empty" while the account holds stock.
+type GhostView struct {
+	Symbol string  `json:"symbol"`
+	Qty    float64 `json:"qty"` // untracked share count (account − tracked)
+	Last   float64 `json:"last"`
 }
 
 func (m *Manager) Report() Report {
@@ -1054,6 +1092,21 @@ func (m *Manager) Report() Report {
 	}
 	sort.Slice(r.Open, func(i, j int) bool { return r.Open[i].OpenedAt.Before(r.Open[j].OpenedAt) })
 	sort.Slice(r.ReverterOpen, func(i, j int) bool { return r.ReverterOpen[i].OpenedAt.Before(r.ReverterOpen[j].OpenedAt) })
+	// Broker-truth cross-check: anything on the account that no strategy tracks shows
+	// up as a ghost row (fresh snapshot only; qty is the untracked EXCESS per symbol).
+	r.BooksBad = m.booksBad
+	if !m.livePosAt.IsZero() && time.Since(m.livePosAt) < 2*time.Minute {
+		for sym, qty := range m.livePos {
+			tracked := 0.0
+			if p, ok := m.open[sym]; ok {
+				tracked = p.Qty
+			}
+			if excess := qty - tracked; excess >= 1 {
+				r.Ghosts = append(r.Ghosts, GhostView{Symbol: sym, Qty: excess, Last: m.lastPrice(sym)})
+			}
+		}
+		sort.Slice(r.Ghosts, func(i, j int) bool { return r.Ghosts[i].Symbol < r.Ghosts[j].Symbol })
+	}
 	today := time.Now().In(m.etz).Format("2006-01-02")
 	agg := func(strategy string) StratStats {
 		st := StratStats{}
