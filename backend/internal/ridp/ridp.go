@@ -112,6 +112,11 @@ type Position struct {
 	Tightened bool      `json:"tightened"`  // rider: 2% trail engaged
 	Sessions  int       `json:"sessions"`   // dipper: sessions held
 	LastDay   string    `json:"last_day"`   // dipper: last session counted
+
+	// Closing state (2026-07-17 leak fix): an exit is IN FLIGHT. The position stays on
+	// the books until the account confirms flat — never finalize a fire-and-forget sell.
+	ExitID     string `json:"exit_id,omitempty"`
+	ExitReason string `json:"exit_reason,omitempty"`
 }
 
 // Trade is one closed round trip.
@@ -622,6 +627,13 @@ func (m *Manager) openPosition(strategy, sym string, qty float64, atr, hardStop 
 			m.journal(strategy, "error", sym, "entry fill unconfirmed ("+qerr.Error()+") — tracking requested qty, will reconcile")
 		}
 	}
+	if fq > 0 && fq < qty {
+		// Partial-fill SNAPSHOT, not a partial order: an accepted market DAY order on a
+		// liquid name completes — tracking only the snapshot is how shares leak. Track
+		// the requested quantity; exits sell the account's real quantity regardless.
+		m.journal(strategy, "entry", sym, fmt.Sprintf("fill snapshot %.0f/%.0f at confirm timeout — tracking full requested qty", fq, qty))
+		fq = qty
+	}
 	if ap <= 0 {
 		ap = m.lastPrice(sym)
 	}
@@ -655,8 +667,61 @@ func (m *Manager) openPosition(strategy, sym string, qty float64, atr, hardStop 
 	log.Printf("[ridp] %s ENTER %s %.0f @ $%.2f", strategy, sym, fq, ap)
 }
 
+// resolveClosing advances a position whose exit order is in flight. Returns true while
+// the position is busy closing (callers skip all other management). The books release
+// the position ONLY when the account confirms flat — the fire-and-forget finalize that
+// leaked untracked shares on 2026-07-17 is gone.
+func (m *Manager) resolveClosing(p *Position) bool {
+	if p.ExitID == "" {
+		return false
+	}
+	qty, ok := m.liveQty(p.Symbol)
+	if !ok {
+		return true // no fresh account truth — keep waiting, do nothing else
+	}
+	if qty <= 0 {
+		// Confirmed flat: record the exit at its real fill price when available.
+		px := 0.0
+		if _, ap, st, err := m.broker.Order(p.ExitID); err == nil && st == "filled" && ap > 0 {
+			px = ap
+		}
+		m.finalize(p, px, p.ExitReason)
+		return true
+	}
+	// Still holding shares — what happened to the exit order?
+	_, _, st, err := m.broker.Order(p.ExitID)
+	if err != nil {
+		return true // transient; check again next tick
+	}
+	switch st {
+	case "canceled", "expired", "rejected", "done_for_day":
+		// The sell died with shares still held: back to normal management, which will
+		// retry the exit (and protection) on the next pass.
+		m.journal(p.Strategy, "error", p.Symbol,
+			fmt.Sprintf("exit order %s with %.0f share(s) still held — resuming management, will retry", st, qty))
+		p.ExitID, p.ExitReason = "", ""
+		m.saveState()
+		return false
+	case "filled":
+		// Filled but shares remain (partial books mismatch): keep the position at the
+		// account's real quantity and let management exit the remainder.
+		m.journal(p.Strategy, "error", p.Symbol,
+			fmt.Sprintf("exit filled but %.0f share(s) remain — tracking remainder, will re-exit", qty))
+		p.Qty = qty
+		p.ExitID, p.ExitReason = "", ""
+		m.saveState()
+		return false
+	default:
+		return true // new / accepted / partially_filled — still working
+	}
+}
+
 // closePosition market-exits a position (confirm-cancel the protective order first).
 func (m *Manager) closePosition(pos *Position, reason string) {
+	if pos.ExitID != "" {
+		m.resolveClosing(pos) // an exit is already in flight — never send a second sell
+		return
+	}
 	if pos.StopID != "" {
 		_ = m.broker.Cancel(pos.StopID)
 		deadline := time.Now().Add(5 * time.Second)
@@ -700,8 +765,19 @@ func (m *Manager) closePosition(pos *Position, reason string) {
 		m.journal(pos.Strategy, "error", pos.Symbol, "exit failed: "+serr.Error())
 		return
 	}
-	_, ap := m.awaitFill(id, 12*time.Second)
-	m.finalize(pos, ap, reason)
+	// The sell is ACCEPTED: the position is now CLOSING and stays on the books until
+	// the account confirms flat (fast path below; otherwise resolveClosing next ticks).
+	pos.ExitID, pos.ExitReason = id, reason
+	m.saveState()
+	fq, ap := m.awaitFill(id, 12*time.Second)
+	if fq > 0 {
+		if q2, qerr := m.broker.PositionQty(pos.Symbol); qerr == nil && q2 <= 0 {
+			m.finalize(pos, ap, reason) // confirmed flat — the common fast path
+			return
+		}
+	}
+	m.journal(pos.Strategy, "exit", pos.Symbol,
+		"exit accepted, awaiting flat confirmation — position remains tracked until the account confirms")
 }
 
 // finalize records the closed trade (exitPx 0 = mark at last price) and releases state.

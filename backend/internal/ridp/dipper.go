@@ -82,6 +82,9 @@ func (m *Manager) manageDipper(now time.Time, sessionMin int) {
 	today := now.Format("2006-01-02")
 	lateDay := sessionMin >= 375 // 15:45+: today's price is close enough to a "close"
 	for _, p := range positions {
+		if m.resolveClosing(p) {
+			continue // exit in flight — nothing else may touch this position
+		}
 		if closed, px := m.exchangeClosed(p); closed {
 			m.finalize(p, px, "hard stop filled (exchange)")
 			continue

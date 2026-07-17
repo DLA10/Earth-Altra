@@ -180,6 +180,9 @@ func (m *Manager) manageReverter(now time.Time) {
 	}
 	flat := now.Hour() > riderFlatHour || (now.Hour() == riderFlatHour && now.Minute() >= riderFlatMin)
 	for _, p := range positions {
+		if m.resolveClosing(p) {
+			continue // exit in flight — nothing else may touch this position
+		}
 		if closed, px := m.exchangeClosed(p); closed {
 			m.finalize(p, px, "exchange stop filled (range broke)")
 			continue
