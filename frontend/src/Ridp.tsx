@@ -69,6 +69,8 @@ export function Ridp() {
   // lists for display, but the headline cards must cover the whole desk).
   const allOpen = [...(rep.open ?? []), ...(rep.reverter_open ?? [])];
   const totalUnreal = allOpen.reduce((a, p) => a + unreal(p), 0);
+  const openFor = (s: string) => allOpen.filter((p) => p.strategy === s);
+  const unrealFor = (s: string) => openFor(s).reduce((a, p) => a + unreal(p), 0);
   // Day P&L straight from Alpaca (equity vs prior close — includes EVERYTHING on the
   // account, tracked or not), marked live between 3s polls the same way the Execution
   // page does it: snapshot + how far live quotes have moved since the snapshot.
@@ -140,85 +142,61 @@ export function Ridp() {
         </div>
       )}
 
-      {/* Open positions — the live table; P&L cells tick sub-second via the quote stream */}
+      {/* ALL open positions — one table, every strategy; P&L ticks sub-second via quotes */}
       <div className="panel">
-        <div className="panel-title">Open positions ({(rep.open ?? []).length})</div>
-        {(rep.open ?? []).length === 0 ? (
-          <p className="muted">Nothing open. RIDER hunts 10:30–14:30 ET; DIPPER buys turned dips at the open.</p>
+        <div className="panel-title">
+          Open positions — all strategies ({allOpen.length})
+          {allOpen.length > 0 && (rep.ghosts ?? []).length === 0 && (
+            <span className="pos" style={{ fontSize: "0.8em", marginLeft: 8 }}>books ↔ account ✓</span>
+          )}
+        </div>
+        {allOpen.length === 0 ? (
+          <p className="muted">
+            Nothing open. RIDER hunts 10:00–14:30 ET; DIPPER buys turned dips at the open; REVERTER buys −1.5σ dips 09:45–15:45.
+          </p>
         ) : (
           <table className="q-table">
             <thead>
               <tr>
                 <th>Strategy</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th>
-                <th>P&amp;L (live)</th><th>Peak</th><th>Exit level</th><th>Held</th>
+                <th>P&amp;L (live)</th><th>Exit level</th><th>Held</th>
               </tr>
             </thead>
             <tbody>
-              {(rep.open ?? []).map((p) => {
-                const u = unreal(p);
-                return (
-                  <tr key={p.symbol}>
-                    <td>{p.strategy === "rider" ? "🏇 RIDER" : "⛰ DIPPER"}</td>
-                    <td><b>{p.symbol}</b></td>
-                    <td>{p.qty}</td>
-                    <td>${p.entry.toFixed(2)}</td>
-                    <td>${mark(p).toFixed(2)}</td>
-                    <td className={cls(u)}><b>{money(u)}</b></td>
-                    <td>${p.peak.toFixed(2)}{p.tightened ? " 🔒" : ""}</td>
-                    <td>${p.trail_level.toFixed(2)}</td>
-                    <td>{p.strategy === "dipper" ? `${p.sessions}d` : since(p.opened_at)}</td>
-                  </tr>
-                );
-              })}
+              {[...allOpen]
+                .sort((a, b) => new Date(a.opened_at).getTime() - new Date(b.opened_at).getTime())
+                .map((p) => {
+                  const u = unreal(p);
+                  return (
+                    <tr key={p.symbol}>
+                      <td>{stratLabel(p.strategy)}</td>
+                      <td><b>{p.symbol}</b></td>
+                      <td>{p.qty}</td>
+                      <td>${p.entry.toFixed(2)}</td>
+                      <td>${mark(p).toFixed(2)}</td>
+                      <td className={cls(u)}><b>{money(u)}</b></td>
+                      <td>${p.trail_level.toFixed(2)}{p.tightened ? " 🔒" : ""}</td>
+                      <td>{p.strategy === "dipper" ? `${p.sessions}d` : since(p.opened_at)}</td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         )}
       </div>
 
+      {/* Per-strategy panels: LIVE open rows + realized stats, so a panel is never
+          "stale zeros" while its strategy is holding positions. */}
       <div className="quant-columns">
         <StratPanel name="🏇 RIDER (intraday momentum)" st={rep.rider}
+          open={openFor("rider")} openUnreal={unrealFor("rider")}
           note="+0.7% from open · above rising VWAP · 1.5× volume · QQQ not falling → trail 3.5%→2% → flat 15:55 (throughput mode)" />
         <StratPanel name="⛰ DIPPER (multi-day dip turn)" st={rep.dipper}
+          open={openFor("dipper")} openUnreal={unrealFor("dipper")}
           note="2+ red days or −4%/5d → buy the turn (prior-high close or +1.5% close on volume) → 2×ATR hard stop → trail 2.5×ATR" />
-      </div>
-
-      {/* REVERTER — live paper: real orders through the shared allocator, no per-strategy trade cap */}
-      <div className="panel">
-        <div className="panel-title">
-          🔄 REVERTER (intraday mean reversion) ·{" "}
-          <span className="muted" style={{ fontSize: "0.8em" }}>live paper · budget-allocated · no trade cap</span>
-        </div>
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          High-amplitude names · buy a −1.5σ dip below the 15-min rolling mean · exit back at the mean · hard stop −4σ · flat 15:55.
-          Realized:{" "}
-          <span className={cls(rep.reverter.realized_pnl)}>{money(rep.reverter.realized_pnl)}</span>{" "}
-          · {rep.reverter.trades} trades · win {rep.reverter.trades > 0 ? `${(rep.reverter.win_rate * 100).toFixed(0)}%` : "—"}
-        </p>
-        {(rep.reverter_open ?? []).length === 0 ? (
-          <p className="muted">No positions open.</p>
-        ) : (
-          <table className="q-table">
-            <thead>
-              <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>P&amp;L (live)</th><th>Floor</th><th>Held</th></tr>
-            </thead>
-            <tbody>
-              {(rep.reverter_open ?? []).map((p) => {
-                const u = unreal(p);
-                return (
-                  <tr key={p.symbol}>
-                    <td><b>{p.symbol}</b></td>
-                    <td>{p.qty}</td>
-                    <td>${p.entry.toFixed(2)}</td>
-                    <td>${mark(p).toFixed(2)}</td>
-                    <td className={cls(u)}><b>{money(u)}</b></td>
-                    <td>${p.trail_level.toFixed(2)}</td>
-                    <td>{since(p.opened_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        <StratPanel name="🔄 REVERTER (intraday mean reversion)" st={rep.reverter}
+          open={openFor("reverter")} openUnreal={unrealFor("reverter")}
+          note="Top-55 high-amplitude names · buy −1.5σ below the 15-min mean · exit at the mean · −4σ floor · flat 15:55 · budget-capped, no trade cap" />
       </div>
 
       {/* DIPPER radar: what it's stalking */}
@@ -273,7 +251,14 @@ function Card({ label, value, tone }: { label: string; value: string; tone?: str
   );
 }
 
-function StratPanel({ name, st, note }: { name: string; st: RidpReport["rider"]; note: string }) {
+function stratLabel(s: string): string {
+  return s === "rider" ? "🏇 RIDER" : s === "reverter" ? "🔄 REVERTER" : "⛰ DIPPER";
+}
+
+function StratPanel({ name, st, note, open, openUnreal }: {
+  name: string; st: RidpReport["rider"]; note: string;
+  open: RidpPosition[]; openUnreal: number;
+}) {
   const money = (v: number) => `${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}`;
   const cls = (v: number) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
   return (
@@ -282,11 +267,23 @@ function StratPanel({ name, st, note }: { name: string; st: RidpReport["rider"];
       <p className="muted" style={{ fontSize: "0.85em" }}>{note}</p>
       <table className="q-table">
         <tbody>
-          <tr><td>Trades</td><td>{st.trades}</td></tr>
+          <tr>
+            <td>Open now</td>
+            <td>
+              {open.length === 0 ? <span className="muted">none</span> : (
+                <>{open.length} ({open.map((p) => p.symbol).join(", ")})</>
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td>Open P&amp;L (live)</td>
+            <td className={cls(openUnreal)}>{open.length > 0 ? money(openUnreal) : "—"}</td>
+          </tr>
+          <tr><td>Closed trades</td><td>{st.trades}</td></tr>
           <tr><td>Win rate</td><td>{st.trades > 0 ? `${(st.win_rate * 100).toFixed(0)}%` : "—"}</td></tr>
           <tr><td>Realized P&amp;L</td><td className={cls(st.realized_pnl)}>{money(st.realized_pnl)}</td></tr>
           <tr><td>Avg / trade</td><td className={cls(st.avg_pnl)}>{money(st.avg_pnl)}</td></tr>
-          <tr><td>Today</td><td className={cls(st.today_pnl)}>{money(st.today_pnl)}</td></tr>
+          <tr><td>Realized today</td><td className={cls(st.today_pnl)}>{money(st.today_pnl)}</td></tr>
         </tbody>
       </table>
     </div>
