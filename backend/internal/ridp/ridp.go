@@ -168,6 +168,16 @@ type Manager struct {
 	livePosAt  time.Time          // when the snapshot was taken (zero = never)
 	acctInfo   quant.AccountInfo  // cached account snapshot for the allocator
 	acctAt     time.Time
+
+	// Ghost reconciliation (2026-07-17 incident: REVERTER's rapid same-symbol re-entry
+	// crossed in-flight exit orders and leaked shares the desk didn't track — 16
+	// unprotected positions held overnight; the old alarm missed them because the
+	// symbols were PARTIALLY tracked, and the flatten's shared-account guard sold only
+	// the tracked qty). This account is DEDICATED (strict one desk per account), so
+	// every share on it is ours: untracked/excess shares get market-flattened during
+	// market hours, throttled per symbol.
+	lastExit     map[string]time.Time // symbol -> last exit time (re-entry cooldown)
+	lastGhostFix map[string]time.Time // symbol -> last reconcile attempt (throttle)
 }
 
 // DailyBar is the minimal daily bar the manager needs (decoupled from the alpaca pkg).
@@ -323,6 +333,7 @@ func New(broker *quant.Broker, engine *candles.Engine, symbols []string, etz *ti
 		dataDir: filepath.Join(dataDir, "ridp"), live: live, dailyFn: dailyFn,
 		open: map[string]*Position{}, daily: map[string]*dailyCtx{}, entered: map[string]bool{},
 		volProf: map[string][]float64{}, lastSkip: map[string]time.Time{},
+		lastExit: map[string]time.Time{}, lastGhostFix: map[string]time.Time{},
 	}
 	_ = os.MkdirAll(m.dataDir, 0o755)
 	m.loadState()
@@ -388,6 +399,7 @@ func (m *Manager) tick() {
 	sessionMin := mins - (9*60 + 30)
 
 	m.refreshLivePositions()
+	m.reconcileGhosts()
 	m.manageRider(now, sessionMin)
 	m.manageDipper(now, sessionMin)
 	m.manageReverter(now)
@@ -429,6 +441,64 @@ func (m *Manager) refreshLivePositions() {
 	m.livePos = snap
 	m.livePosAt = time.Now()
 	m.mu.Unlock()
+}
+
+// reconcileGhosts flattens shares on this DEDICATED account that no strategy tracks:
+// fully untracked symbols, and the excess when the account holds more than the tracked
+// position (both are entry-tracking leaks — e.g. a buy crossing an in-flight exit).
+// Runs only during market hours (tick gates that), throttled per symbol, reads the
+// batched snapshot (no extra polling). This is the fix for 2026-07-17: 16 leaked
+// positions sat overnight with no stops and no owner.
+func (m *Manager) reconcileGhosts() {
+	m.mu.Lock()
+	if m.livePosAt.IsZero() || time.Since(m.livePosAt) > 45*time.Second {
+		m.mu.Unlock()
+		return // no fresh truth — don't act on guesses
+	}
+	type fix struct {
+		sym     string
+		sell    float64
+		tracked float64
+	}
+	var fixes []fix
+	for sym, qty := range m.livePos {
+		if qty <= 0 {
+			continue
+		}
+		pos, tracked := m.open[sym]
+		excess := qty
+		trackedQty := 0.0
+		if tracked {
+			trackedQty = pos.Qty
+			excess = qty - pos.Qty
+		}
+		if excess < 1 { // whole-share desk; fractions can't be ours
+			continue
+		}
+		// NEVER act while one of our own exits might still be in flight for this symbol
+		// (double-selling an in-flight exit would short the account). The order resolves
+		// in seconds; the ghost can wait two minutes.
+		if time.Since(m.lastExit[sym]) < 2*time.Minute {
+			continue
+		}
+		if time.Since(m.lastGhostFix[sym]) < 3*time.Minute {
+			continue
+		}
+		m.lastGhostFix[sym] = time.Now()
+		fixes = append(fixes, fix{sym: sym, sell: excess, tracked: trackedQty})
+	}
+	m.mu.Unlock()
+	for _, f := range fixes {
+		coid := fmt.Sprintf("ridp_ghost__%s__flatten__%d", f.sym, time.Now().UnixNano())
+		if _, err := m.broker.MarketSell(f.sym, f.sell, coid); err != nil {
+			m.journal("ghost", "error", f.sym,
+				fmt.Sprintf("ghost flatten failed (%.0f untracked, %.0f tracked): %v", f.sell, f.tracked, err))
+			continue
+		}
+		m.journal("ghost", "exit", f.sym,
+			fmt.Sprintf("flattened %.0f UNTRACKED share(s) (%.0f tracked) — leaked by a crossed entry/exit, not any strategy's position", f.sell, f.tracked))
+		log.Printf("ridp: ⚠ ghost reconcile: sold %.0f untracked %s", f.sell, f.sym)
+	}
 }
 
 // liveQty reads a symbol's held quantity from the batched snapshot. ok=false when the
@@ -603,9 +673,13 @@ func (m *Manager) closePosition(pos *Position, reason string) {
 		return
 	}
 	if qty > pos.Qty {
-		// Shared-account guard: another desk may hold the same symbol here. Only ever
-		// sell THIS desk's shares, never the account total.
-		qty = pos.Qty
+		// DEDICATED account (strict one desk per account since 2026-07-16): every share
+		// of this symbol here is ours, so an exit flattens the FULL account quantity.
+		// (The old only-sell-tracked-qty guard stranded leaked shares overnight on
+		// 2026-07-17 — 16 unprotected positions.) Excess means entry-tracking leaked;
+		// say so in the journal.
+		m.journal(pos.Strategy, "error", pos.Symbol,
+			fmt.Sprintf("exit found %.0f held vs %.0f tracked — flattening ALL (dedicated account)", qty, pos.Qty))
 	}
 	coid := fmt.Sprintf("ridp_%s__%s__exit__%s__%d", pos.Strategy, pos.Symbol, sanitize(reason), time.Now().UnixNano())
 	id, serr := m.broker.MarketSell(pos.Symbol, qty, coid)
@@ -628,6 +702,7 @@ func (m *Manager) finalize(pos *Position, exitPx float64, reason string) {
 	m.mu.Lock()
 	delete(m.open, pos.Symbol)
 	m.closed = append(m.closed, tr)
+	m.lastExit[pos.Symbol] = time.Now() // re-entry cooldown: never buy into our own in-flight exit
 	m.mu.Unlock()
 	m.saveState()
 	m.appendTrade(tr)

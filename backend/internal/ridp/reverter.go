@@ -129,8 +129,14 @@ func (m *Manager) scanReverterEntries(now time.Time) {
 		}
 		m.mu.Lock()
 		_, held := m.open[sym] // one position per symbol across strategies
+		// Re-entry cooldown (2026-07-17 leak): buying the same symbol while our previous
+		// exit order is still settling crosses orders and leaks untracked shares. 90s is
+		// several ticks — the exit is long resolved. Also never buy a symbol the account
+		// already holds untracked (a ghost awaiting reconcile — don't pyramid onto it).
+		cooling := time.Since(m.lastExit[sym]) < 90*time.Second
+		ghostQty := m.livePos[sym]
 		m.mu.Unlock()
-		if held {
+		if held || cooling || ghostQty >= 1 {
 			continue
 		}
 		z, last, std, ok := m.reverterZ(sym)
