@@ -91,7 +91,15 @@ VETO (no_buy) when you can name one of these:
   (momentum_cont, dip_bounce — they hold ~2-3 hours) firing after ~14:00 ET.
 - BAD BRACKET GEOMETRY: risk_pct > 1.5% of price, or reward_risk < 1.0 (shouldn't happen; veto
   if it does).
-- CAUTIOUS POSTURE + any soft spot above.
+- CAUTIOUS POSTURE + TWO of the soft spots above. One soft spot alone is priced through a
+  lower conviction (half size), NOT a veto — caution changes size, not whether valid setups
+  trade at all.
+
+NOT veto reasons (handled upstream — do not double-punish):
+- The market regime/trend cell: a deterministic trend-alignment playbook has ALREADY verified
+  this strategy is allowed in today's (market trend, stock trend) cell before you see it. A
+  red or below-trend tape is not, by itself, a red flag for a mean-reversion entry.
+- A strategy's losing streak: the eval scoreboard benches those before you see them.
 
 CONVICTION (drives position size — be honest, it's logged and scored):
 - 0.7-0.9: clean setup, strong participation (rvol >= 1.8), friendly tape, mid-session. Full size.

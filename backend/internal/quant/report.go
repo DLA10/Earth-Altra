@@ -2,6 +2,7 @@ package quant
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,6 +51,7 @@ type DipScorecard struct {
 	AvgConf    float64    `json:"avg_confidence"` // mean conviction on approvals
 	Dip        SourceStat `json:"dip"`            // realized outcomes of dip-pipeline trades
 	Signal     SourceStat `json:"signal"`         // realized outcomes of signal-pipeline trades
+	Rise       SourceStat `json:"rise"`           // realized outcomes of rise-watcher trades
 	Rehydrated SourceStat `json:"rehydrated"`     // positions adopted after a restart (unknown origin)
 	KnifeRate  float64    `json:"knife_rate"`     // losing dip trades / dip trades
 	Verdict    string     `json:"verdict"`        // plain-language read for the page
@@ -63,35 +65,123 @@ type AgentInfo struct {
 	Live  bool   `json:"live"` // enabled/active right now
 }
 
-// QuantReport is the full state the Paper·Claude page renders.
+// DeskReport is one desk's (paper account's) headline line: the signal desk and the
+// dip+rise desk each trade their own account with their own allocator and loss cap.
+type DeskReport struct {
+	Name       string        `json:"name"` // "signal" | "dip+rise"
+	Live       bool          `json:"live"`
+	Alloc      AllocSnapshot `json:"alloc"`
+	Realized   float64       `json:"realized_pnl"`
+	Unrealized float64       `json:"unrealized_pnl"`
+	DayPnL     float64       `json:"account_day_pnl"` // Alpaca: equity − last_equity (broker truth)
+	Trades     int           `json:"trades"`
+}
+
+// QuantReport is the full state the Paper·Claude page renders. Since the desk split,
+// the page evaluates the SIGNAL desk: State/Alloc/Attribution cover the signal account
+// only (the Dip+Rise page owns that desk's numbers). Desks still lists both accounts'
+// headline P&L side by side so the team view is one glance away.
 type QuantReport struct {
 	Live         bool            `json:"live"`
 	UniverseSize int             `json:"universe_size"`
 	Posture      string          `json:"posture"`
 	Alloc        AllocSnapshot   `json:"alloc"`
 	State        QuantState      `json:"state"`
+	Desks        []DeskReport    `json:"desks,omitempty"`
 	Attribution  ExitAttribution `json:"attribution"`
 	DipScore     *DipScorecard   `json:"dip_score,omitempty"`
 	Agents       []AgentInfo     `json:"agents,omitempty"`
 	Review       *Review         `json:"review,omitempty"`
 }
 
-// Report assembles the current quant pipeline state (realized-only P&L + attribution + latest
-// review). Read-only.
+// deskState reconstructs one broker's account (empty state when disabled/unreachable).
+func (e *Engine) deskState(b *Broker) QuantState {
+	if b == nil || !b.Enabled() {
+		return QuantState{}
+	}
+	st, err := b.Reconstruct(e.LastClose)
+	if err != nil {
+		return QuantState{}
+	}
+	return st
+}
+
+// MergedState reconstructs the team's trades across BOTH desk accounts (dip+rise and
+// signal) — the whole-team numbers the report and the daily reviewer read.
+func (e *Engine) MergedState() QuantState {
+	dip := e.deskState(e.broker)
+	if e.sigBroker == nil {
+		return dip
+	}
+	sig := e.deskState(e.sigBroker)
+	m := QuantState{
+		RealizedPNL:   dip.RealizedPNL + sig.RealizedPNL,
+		UnrealizedPNL: dip.UnrealizedPNL + sig.UnrealizedPNL,
+		Positions:     append(append([]QuantPosition{}, dip.Positions...), sig.Positions...),
+		Trades:        append(append([]QuantTrade{}, dip.Trades...), sig.Trades...),
+	}
+	sort.Slice(m.Positions, func(i, j int) bool { return m.Positions[i].Symbol < m.Positions[j].Symbol })
+	sort.Slice(m.Trades, func(i, j int) bool { return m.Trades[i].ExitTime.Before(m.Trades[j].ExitTime) })
+	wins := 0
+	for _, t := range m.Trades {
+		if t.PNL > 0 {
+			wins++
+		}
+	}
+	m.TotalTrades = len(m.Trades)
+	if m.TotalTrades > 0 {
+		m.WinRate = float64(wins) / float64(m.TotalTrades) * 100
+	}
+	return m
+}
+
+// Report assembles the current quant team state (realized-only P&L + attribution + latest
+// review), whole-team merged with a per-desk breakdown. Read-only.
 func (e *Engine) Report() QuantReport {
-	r := QuantReport{Live: e.live}
+	r := QuantReport{Live: e.live || e.sigLive}
 	if e.universe != nil {
 		r.UniverseSize = len(e.universe.Symbols())
 		r.Posture = e.universe.Regime().Posture
 	}
-	if e.alloc != nil {
-		r.Alloc = e.alloc.Snapshot()
-	}
-	if e.broker != nil && e.broker.Enabled() {
-		if st, err := e.broker.Reconstruct(e.LastClose); err == nil {
-			r.State = st
+
+	dip := e.deskState(e.broker)
+	if e.sigBroker != nil || e.sigAlloc != nil {
+		sig := e.deskState(e.sigBroker)
+		var sigSnap AllocSnapshot
+		if e.sigAlloc != nil {
+			sigSnap = e.sigAlloc.Snapshot()
 		}
+		var dipSnap AllocSnapshot
+		if e.alloc != nil {
+			dipSnap = e.alloc.Snapshot()
+		}
+		r.Live = e.sigLive // the page is the signal desk's page
+		r.Alloc = sigSnap
+		// Day P&L per desk straight from Alpaca (equity vs prior close) — broker-level
+		// truth that covers every share on the account, not just what we journaled.
+		deskDay := func(b *Broker) float64 {
+			if b == nil || !b.Enabled() {
+				return 0
+			}
+			if ai, err := b.Account(); err == nil {
+				return round2(ai.DayPnL())
+			}
+			return 0
+		}
+		r.Desks = []DeskReport{
+			{Name: "signal", Live: e.sigLive, Alloc: sigSnap, DayPnL: deskDay(e.sigBroker),
+				Realized: round2(sig.RealizedPNL), Unrealized: round2(sig.UnrealizedPNL), Trades: sig.TotalTrades},
+			{Name: "dip+rise", Live: e.live, Alloc: dipSnap, DayPnL: deskDay(e.broker),
+				Realized: round2(dip.RealizedPNL), Unrealized: round2(dip.UnrealizedPNL), Trades: dip.TotalTrades},
+		}
+		r.State = sig // SIGNAL account only — each desk's P&L stays its own
+	} else {
+		if e.alloc != nil {
+			r.Alloc = e.alloc.Snapshot()
+		}
+		r.State = dip
 	}
+
 	r.Attribution = attribution(r.State.Trades)
 	r.DipScore = e.dipScorecard(20)
 	r.Review = e.latestReview()
@@ -124,7 +214,7 @@ func (e *Engine) dipScorecard(windowDays int) *DipScorecard {
 
 	sc := &DipScorecard{WindowDays: windowDays}
 	var confSum float64
-	src := map[string]*SourceStat{"dip": &sc.Dip, "signal": &sc.Signal, "rehydrated": &sc.Rehydrated}
+	src := map[string]*SourceStat{"dip": &sc.Dip, "signal": &sc.Signal, "rise": &sc.Rise, "rehydrated": &sc.Rehydrated}
 	for _, n := range names {
 		b, err := os.ReadFile(filepath.Join(dir, "decisions", n))
 		if err != nil {
@@ -244,6 +334,126 @@ func attribution(trades []QuantTrade) ExitAttribution {
 	// Only a meaningful verdict when BOTH kinds of exit exist to compare.
 	att.Agent3AddsValue = att.DiscretionaryCount > 0 && att.StopCount > 0 && att.DiscretionaryAvg >= att.StopAvg
 	return att
+}
+
+// DipRiseEvent is one recent decision-log line on the dip+rise desk's timeline: a
+// detected dip, Agent 2's verdict, a rise arm/trigger/expiry, a funding decision, or a
+// close outcome.
+type DipRiseEvent struct {
+	Time   string `json:"time"`
+	Agent  string `json:"agent"`
+	Event  string `json:"event"`
+	Symbol string `json:"symbol"`
+	Note   string `json:"note"`
+}
+
+// DipRiseReport is everything the Dip+Rise page renders: desk state (its own account),
+// the dips currently armed for a rise confirmation, the dip scorecard, and the recent
+// decision timeline.
+type DipRiseReport struct {
+	Enabled  bool           `json:"enabled"`   // PAPER_DIP broker keys present
+	Live     bool           `json:"live"`      // dip pipeline placing paper orders
+	RiseLive bool           `json:"rise_live"` // rise watcher placing paper orders
+	Alloc    AllocSnapshot  `json:"alloc"`
+	State    QuantState     `json:"state"` // the dip+rise account only
+	DipScore *DipScorecard  `json:"dip_score,omitempty"`
+	Armed    []RiseArmView  `json:"armed"`
+	Events   []DipRiseEvent `json:"events"`
+}
+
+// dipRiseAgents are the decision-log agents that belong to the dip+rise desk's story.
+// (allocator records come only from the dip funding path; the signal desk logs its
+// funding under signal_trader.)
+var dipRiseAgents = map[string]bool{
+	"pipeline": true, "agent2_entry": true, "rise_watch": true, "allocator": true,
+}
+
+// DipRiseReport assembles the Dip+Rise page state. Read-only.
+func (e *Engine) DipRiseReport() DipRiseReport {
+	r := DipRiseReport{
+		Enabled:  e.broker != nil && e.broker.Enabled(),
+		Live:     e.live,
+		RiseLive: e.rise.Live(),
+		State:    e.deskState(e.broker),
+		DipScore: e.dipScorecard(20),
+		Armed:    e.rise.Armed(),
+	}
+	if r.Armed == nil {
+		r.Armed = []RiseArmView{}
+	}
+	if e.alloc != nil {
+		r.Alloc = e.alloc.Snapshot()
+	}
+	r.Events = e.dipRiseEvents(2, 200)
+	return r
+}
+
+// dipRiseEvents reads the newest `days` decision logs and returns the dip+rise desk's
+// lines, newest first, capped at max.
+func (e *Engine) dipRiseEvents(days, max int) []DipRiseEvent {
+	dir := e.dataDir
+	if dir == "" {
+		dir = "data"
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "decisions"))
+	if err != nil {
+		return []DipRiseEvent{}
+	}
+	var names []string
+	for _, en := range entries {
+		if strings.HasSuffix(en.Name(), ".jsonl") {
+			names = append(names, en.Name())
+		}
+	}
+	sort.Strings(names)
+	if len(names) > days {
+		names = names[len(names)-days:]
+	}
+	out := []DipRiseEvent{}
+	for _, n := range names {
+		b, err := os.ReadFile(filepath.Join(dir, "decisions", n))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var rec struct {
+				Time   string          `json:"time"`
+				Agent  string          `json:"agent"`
+				Event  string          `json:"event"`
+				Symbol string          `json:"symbol"`
+				Note   string          `json:"note"`
+				Output json.RawMessage `json:"output"`
+			}
+			if json.Unmarshal([]byte(line), &rec) != nil || !dipRiseAgents[rec.Agent] {
+				continue
+			}
+			note := rec.Note
+			// Agent 2 decisions carry the verdict in the structured output, not the note.
+			if rec.Agent == "agent2_entry" && rec.Event == "decision" {
+				var d struct {
+					Action     string  `json:"action"`
+					Confidence float64 `json:"confidence"`
+					Reason     string  `json:"reason"`
+				}
+				if json.Unmarshal(rec.Output, &d) == nil && d.Action != "" {
+					note = fmt.Sprintf("%s (%.2f) — %s", strings.ToUpper(d.Action), d.Confidence, d.Reason)
+				}
+			}
+			out = append(out, DipRiseEvent{Time: rec.Time, Agent: rec.Agent, Event: rec.Event,
+				Symbol: rec.Symbol, Note: note})
+		}
+	}
+	// Newest first, capped.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 func (e *Engine) latestReview() *Review {

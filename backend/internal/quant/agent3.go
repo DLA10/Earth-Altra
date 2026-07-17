@@ -86,7 +86,9 @@ YOUR ACTIONS (choose exactly one via record_exit_decision):
 
 THE SNAPSHOT (JSON) describes the open position:
 - entry_price, current_price, unrealized_pnl_pct, minutes_held, current_stop (where the floor is now).
-- price vs vwap (price_vs_vwap_pct), rsi, recent 1-min bars, order flow (normalized), rvol.
+- price vs vwap (price_vs_vwap_pct), rsi, order flow (normalized), rvol.
+- bars_1m (last 10 minutes, fine detail) AND bars_5m (last ~20 minutes, structure): read
+  bars_5m for the trend / higher-lows picture, bars_1m for what's happening right now.
 - market: SPY/QQQ % from open + above/below VWAP (the backdrop).
 - now_et (mind the clock — late in the session, lean toward banking gains; near the close the
   system flattens everything anyway).
@@ -95,6 +97,10 @@ THE SNAPSHOT (JSON) describes the open position:
     * MEAN-REVERSION (dip_bounce, vwap_reclaim, dip): the edge is the snap-back, and it FADES.
       Bank profits sooner — a reversion that stalls near VWAP/target is done; don't wait for a
       trend that was never the thesis.
+    * CONFIRMED BOUNCE (dip_rise): a short-lived bounce entered AFTER the turn confirmed. It has
+      a hard 40-minute time exit — the fastest-fading edge on the desk. Manage it aggressively:
+      bank profit on any stall, and exit_now the moment the bounce structure breaks (a lower low
+      or a close back under the dip price).
     * MOMENTUM (orb_breakout, momentum_cont, rel_strength, fh_reversal): the edge is continuation.
       Give a working winner ROOM — trail under higher lows rather than taking profit early.
   - original_target: the take-profit price the strategy set at entry. pct_to_target: how far from

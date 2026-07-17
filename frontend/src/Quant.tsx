@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client";
-import type { QuantReport, Scoreboard, SourceStat } from "./types";
+import { useWebSocket } from "./hooks/useWebSocket";
+import type { QuantReport, Scoreboard, SourceStat, WsMessage } from "./types";
 
 // Quant renders the dip-driven AI team on the Claude paper account: the deterministic detector →
 // Agent 2 (entry, Opus) → shared-budget allocator → Agent 3 (exit, Haiku), plus Agent 4
@@ -10,6 +11,11 @@ export function Quant() {
   const [enabled, setEnabled] = useState(true);
   const [err, setErr] = useState("");
   const [scoreboard, setScoreboard] = useState<Scoreboard | null>(null);
+  // Live prices for open positions from the portal-wide quote stream (sub-second ticks
+  // between the 5s REST polls). The backend subscribes each desk position's quotes on
+  // entry, so these arrive for every open symbol.
+  const [live, setLive] = useState<Record<string, number>>({});
+  const symbolsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -20,6 +26,7 @@ export function Quant() {
           if (!alive) return;
           setEnabled(r.enabled);
           setRep(r.report ?? null);
+          symbolsRef.current = new Set((r.report?.state.positions ?? []).map((p) => p.symbol));
           setErr("");
         })
         .catch((e) => alive && setErr(String(e)));
@@ -30,6 +37,12 @@ export function Quant() {
       window.clearInterval(id);
     };
   }, []);
+
+  useWebSocket((m: WsMessage) => {
+    if (m.type === "quote" && symbolsRef.current.has(m.data.symbol)) {
+      setLive((prev) => ({ ...prev, [m.data.symbol]: m.data.price }));
+    }
+  });
 
   useEffect(() => {
     let alive = true;
@@ -79,13 +92,33 @@ export function Quant() {
   const positions = s.positions ?? [];
   const trades = s.trades ?? [];
   const byReason = att.by_reason ?? {};
+  const desks = rep.desks ?? [];
+  // This page evaluates the SIGNAL desk: state/alloc are its account only. The desks
+  // table below shows both desks side by side; the Dip+Rise page owns that desk's detail.
+  const openCount = a.open_count;
+  const maxConc = a.max_concurrent;
+  const budgetFree = a.free;
+  const budgetTotal = a.budget;
   const money = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`;
   const cls = (v: number) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+  const deskLabel = (name: string) =>
+    name === "signal" ? "Signal desk · 6 strategies + ML gate + judge" : "Dip+Rise desk · Agent 2 dips + rise watcher";
+  // Mark open positions to the live quote (falls back to the poll's mark price).
+  const markPx = (sym: string, fallback: number) => live[sym] ?? fallback;
+  const liveUnreal = positions.reduce(
+    (sum, p) => sum + (markPx(p.symbol, p.mark_price) - p.entry_price) * p.qty,
+    0
+  );
 
   return (
     <div className="quant-page">
       <div className="quant-head">
-        <h2>Paper Trade · Claude — AI Quant Team</h2>
+        <h2>
+          Paper Trade · Claude — Signal Desk{" "}
+          <span className="muted" style={{ fontSize: "0.6em" }}>
+            6 strategies + ML gate + judge · own paper account · Dip+Rise has its own page
+          </span>
+        </h2>
         <span className={`mode-badge ${rep.live ? "live" : "shadow"}`}>{rep.live ? "LIVE (paper)" : "SHADOW"}</span>
         {rep.posture && <span className="posture-badge">{rep.posture}</span>}
         <span className="muted small">universe: {rep.universe_size} symbols</span>
@@ -94,25 +127,57 @@ export function Quant() {
       {/* Headline cards (realized-only) */}
       <div className="quant-cards">
         <Card label="Realized P&L" value={money(s.realized_pnl)} cls={cls(s.realized_pnl)} />
-        <Card label="Unrealized (open)" value={money(s.unrealized_pnl)} cls={cls(s.unrealized_pnl)} />
+        <Card
+          label="Unrealized (live)"
+          value={positions.length === 0 ? "flat" : money(liveUnreal)}
+          cls={positions.length === 0 ? "" : cls(liveUnreal)}
+        />
         <Card label="Win rate" value={`${s.win_rate.toFixed(0)}%`} />
         <Card label="Closed trades" value={String(s.total_trades)} />
-        <Card label="Open / Max" value={`${a.open_count} / ${a.max_concurrent}`} />
-        <Card label="Budget free" value={`$${a.free.toFixed(0)} / $${a.budget.toFixed(0)}`} />
+        <Card label="Open / Max" value={`${openCount} / ${maxConc}`} />
+        <Card label="Budget free" value={`$${budgetFree.toFixed(0)} / $${budgetTotal.toFixed(0)}`} />
       </div>
 
-      {/* Budget vs real account equity (the allocator is capped at real cash) */}
-      <div className="attr-verdict" style={{ marginBottom: 12 }}>
-        Allocator budget <b>${a.budget.toFixed(0)}</b>
-        {a.account_equity > 0 ? (
-          <> · capped at real paper-account equity <b>${a.account_equity.toFixed(0)}</b>
-            {a.configured_max > a.account_equity && <span className="neg"> (target ${a.configured_max.toFixed(0)} trimmed to fit the account)</span>}
-          </>
-        ) : (
-          <span className="muted"> · account equity not yet synced</span>
-        )}
-        {" · "}deployed <b>${a.deployed.toFixed(0)}</b>
-      </div>
+      {/* Per-desk budgets: each desk trades its OWN paper account with its own allocator
+          and daily loss cap (they can never touch each other's capital). */}
+      {desks.length > 0 ? (
+        <div className="panel">
+          <div className="panel-title">Two desks, two accounts</div>
+          <table className="q-table">
+            <thead>
+              <tr><th>Desk</th><th>Mode</th><th>Budget</th><th>Free</th><th>Open / Max</th><th>Account equity</th><th>Day P&L (Alpaca)</th><th>Realized P&L</th><th>Unrealized</th></tr>
+            </thead>
+            <tbody>
+              {desks.map((d) => (
+                <tr key={d.name}>
+                  <td className="mono-strong">{deskLabel(d.name)}</td>
+                  <td className={d.live ? "pos" : "muted"}>{d.live ? "LIVE (paper)" : "shadow"}</td>
+                  <td>${d.alloc.budget.toFixed(0)}</td>
+                  <td>${d.alloc.free.toFixed(0)}</td>
+                  <td>{d.alloc.open_count} / {d.alloc.max_concurrent}</td>
+                  <td>{d.alloc.account_equity > 0 ? `$${d.alloc.account_equity.toFixed(0)}` : "—"}</td>
+                  <td className={cls(d.account_day_pnl ?? 0)}>{typeof d.account_day_pnl === "number" ? money(d.account_day_pnl) : "—"}</td>
+                  <td className={cls(d.realized_pnl)}>{money(d.realized_pnl)}</td>
+                  <td className={cls(d.unrealized_pnl)}>{money(d.unrealized_pnl)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        /* Single-desk fallback: budget vs real account equity */
+        <div className="attr-verdict" style={{ marginBottom: 12 }}>
+          Allocator budget <b>${a.budget.toFixed(0)}</b>
+          {a.account_equity > 0 ? (
+            <> · capped at real paper-account equity <b>${a.account_equity.toFixed(0)}</b>
+              {a.configured_max > a.account_equity && <span className="neg"> (target ${a.configured_max.toFixed(0)} trimmed to fit the account)</span>}
+            </>
+          ) : (
+            <span className="muted"> · account equity not yet synced</span>
+          )}
+          {" · "}deployed <b>${a.deployed.toFixed(0)}</b>
+        </div>
+      )}
 
       {/* Team P&L by pipeline — which half of the desk is actually earning (rolling window,
           forward from when source-tagging began). */}
@@ -126,6 +191,9 @@ export function Quant() {
             <tbody>
               <PipelineRow label="Dip pipeline · Agent 2" st={rep.dip_score.dip} money={money} cls={cls} />
               <PipelineRow label="Signal engine · 6 strategies + ML gate" st={rep.dip_score.signal} money={money} cls={cls} />
+              {rep.dip_score.rise && rep.dip_score.rise.trades > 0 && (
+                <PipelineRow label="Rising watcher · confirmed post-dip bounces" st={rep.dip_score.rise} money={money} cls={cls} />
+              )}
               {rep.dip_score.rehydrated.trades > 0 && (
                 <PipelineRow label="Rehydrated (post-restart, origin unknown)" st={rep.dip_score.rehydrated} money={money} cls={cls} faint />
               )}
@@ -265,17 +333,21 @@ export function Quant() {
           <p className="muted">Flat.</p>
         ) : (
           <table className="q-table">
-            <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unrealized</th></tr></thead>
+            <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>P&L (live)</th></tr></thead>
             <tbody>
-              {positions.map((p) => (
-                <tr key={p.symbol}>
-                  <td className="mono-strong">{p.symbol}</td>
-                  <td>{p.qty}</td>
-                  <td>${p.entry_price.toFixed(2)}</td>
-                  <td>${p.mark_price.toFixed(2)}</td>
-                  <td className={cls(p.unrealized_pnl)}>{money(p.unrealized_pnl)}</td>
-                </tr>
-              ))}
+              {positions.map((p) => {
+                const px = markPx(p.symbol, p.mark_price);
+                const u = (px - p.entry_price) * p.qty;
+                return (
+                  <tr key={p.symbol}>
+                    <td className="mono-strong">{p.symbol}</td>
+                    <td>{p.qty}</td>
+                    <td>${p.entry_price.toFixed(2)}</td>
+                    <td>${px.toFixed(2)}</td>
+                    <td className={cls(u)}>{money(u)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -103,6 +103,19 @@ backend/
                             on-demand activation
     quant/                  AI quant pipeline: Agent 2 entry + Allocator + Broker/Manager +
                             Agent 3 exit + Agent 4 sentiment + daily review (paper account)
+    ridp/                   RIDP deterministic paper desk: RIDER + DIPPER + REVERTER (all live
+                            paper) — the operator's validated patterns; no LLM on the trade
+                            path; own journal/state under data/ridp/; "ridp_" coid attribution.
+                            REVERTER = intraday mean reversion (buy a −1.5σ dip below a 15-min
+                            rolling mean on high-amplitude names — top 55 by ATR% (fixed
+                            count since throughput mode; was top-tercile) —, exit at
+                            the mean, exchange stop at the z=−4 floor, flat 15:55). Routed
+                            through the SHARED allocator (competes with RIDER/DIPPER for the
+                            same 80%-of-buying-power budget) with NO per-strategy trade cap —
+                            only the budget limits it (reverter.go). Backtest edge is real but
+                            thin and cost-sensitive (12-month study: robustly positive only at
+                            ≤1-2 bps round-trip cost); running it live-paper is to measure real
+                            fill quality before trusting it
     risk/                   deterministic guardrails (loss cap, sizing, concurrency) — paper only
     signals/                multi-strategy intraday signal engine + backtester (paper/shadow only)
     scanner/                DECEPTICON per-ticker scan metrics
@@ -115,6 +128,9 @@ frontend/src/
   Watchlist.tsx             Watchlist page (stacked live charts + opening movers)
   Decepticon.tsx            DECEPTICON scanner page (+ MarketMovers with news dropdowns)
   Quant.tsx                 Paper · Claude page (quant pipeline report)
+  Ridp.tsx                  RIDP page (Rider, Dipper & Reverter live-paper desk; open-position
+                            P&L marked live to the WS quote stream — sub-second — between 3s
+                            REST polls)
   Metrics.tsx               realized-P&L analytics
   TradeHistory.tsx          Alpaca fill log
   indicators.ts             Bollinger + RSI math + signal grading
@@ -129,8 +145,10 @@ frontend/src/
                             Header, Positions, Watchlist (left panel), LiveChart, MiniChart,
                             ChartModal, NewsPanel, MarketMovers, SymbolSearch, StrategyBadge,
                             OrderAlerts, RangeToggle, LazyMount, ErrorBoundary
-EVENT_DRIVEN_WATCHLIST.md   DECEPTICON universe (markdown tables → ~27 depts, ~472 tickers)
-QUANT_UNIVERSE.json         curated ~100-symbol signal-engine universe (liquid, no penny stocks)
+EVENT_DRIVEN_WATCHLIST.md   DECEPTICON universe (markdown tables → 39 depts, ~683 tickers;
+                            since 2026-07-16 includes full S&P 500 core coverage + new
+                            listings like SKHY — every ticker verified tradable on Alpaca)
+QUANT_UNIVERSE.json         curated ~160-symbol signal-engine universe (liquid large caps, no penny stocks)
 Instruction.md              pre-market universe-selection playbook (writes daily_universe.json)
 QUANT_VISION.md             design + roadmap for the AI agentic quant system
 scripts/                    PowerShell launchers (check-keys, run-backend/frontend, launch)
@@ -209,6 +227,21 @@ START-Live-Optimus.bat      one-click Windows launcher
   - **Dip pipeline (older)**: `dipwatch` → `Engine.OnDip` → **Agent 2** (`agent2.go`, forced
     tool call, buy/no-buy) → allocator → Manager. **No ML gate.** Kept because the operator's
     Telegram dip alerts feed it — do NOT disturb `dipwatch`.
+  - **Rise pipeline (`risewatch.go`)**: dips Agent 2 DECLINES are armed for 10 min; a
+    completed green 1-min close +0.10% above the dip price — with the dip low never
+    undercut (undercut = disarm) and the confirming bar's volume ≥ the post-dip average —
+    confirms the rise → deterministic entry (no LLM) through the shared
+    posture/loss-cap/allocator tail with time-boxed exits (1.5% trail, +2R target, 40-min
+    max hold via `EntryContext.TrailPct/MaxHoldMin`). Validation status (2026-07-09):
+    the rule made +27R/228 entries on a 1-month dipwatch-recipe replay (391 dips), but
+    the 12-MONTH replay (8,703 dips → 4,667 entries) is NEGATIVE overall (−530R; bleeds
+    in trending-up regimes 2025Q4/2026Q1, pays in the corrective 2026Q2 tape), and
+    walk-forward ML gating (LightGBM at 4 margins + logistic baseline) only reduced the
+    bleed, never turned it positive. Conclusion: a REGIME tool, not all-weather. The
+    pre-registered hypothesis is that it earns a live slot only under a cautious/
+    corrective posture — which is the current tape, so since 2026-07-16 it runs **LIVE**
+    (`QUANT_RISE_LIVE=true` in .env; config default remains false). Bench it again
+    (`QUANT_RISE_LIVE=false`) if the regime turns into a sustained uptrend.
   - **Shared infrastructure**: `Allocator` (`allocator.go` — shared budget **capped at the
     real paper-account equity** via `Broker.Account()` + `SetEquityCeiling`, synced every
     60s; 3 slots; conviction full/half sizing; quality-ranked under contention). `Manager`
@@ -230,8 +263,9 @@ START-Live-Optimus.bat      one-click Windows launcher
 
 - **`signals`** — the multi-strategy intraday signal engine (QUANT_VISION Phase 1): six
   deterministic detectors (ORB breakout, VWAP reclaim, momentum continuation, dip bounce,
-  relative strength, first-hour reversal) over the curated QUANT_UNIVERSE.json (~100
-  names), fed as an ADDITIVE bar consumer off the single SIP stream. Every signal + its
+  relative strength, first-hour reversal) over the curated QUANT_UNIVERSE.json (~160
+  liquid large caps since 2026-07-09), fed as an ADDITIVE bar consumer off the single SIP
+  stream. Every signal + its
   counterfactual bracket outcome is journaled to `data/signals/*.jsonl` (the ML training
   set), annotated with the **time-of-day gate** verdict (`tod_stats.json`, decayed
   buckets — halflife 30 outcomes; `EntryAllowed`). The TOD gate is **shadow-only by
@@ -406,18 +440,27 @@ chart's single-symbol subscription.
 | `DECEPTICON_ENABLED` | `true` | Enable the scanner page/stream |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_RPM` / `GEMINI_DAILY_CAP` | — / `gemini-3.5-flash` / `8` / `200` | Optional movers-news summaries |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Optional dip-watcher alerts |
-| `PAPER_CLAUDE_KEY` / `PAPER_CLAUDE_SECRET` | — | Quant pipeline's SEPARATE paper account |
+| `PAPER_CLAUDE_KEY` / `PAPER_CLAUDE_SECRET` | — | SIGNAL desk's paper account (6-strategy engine + ML gate + judge) |
+| `PAPER_DIP_KEY` / `PAPER_DIP_SECRET` | — | DIP+RISE desk's paper account (Agent 2 dips + rise watcher; empty = family stays shadow) |
+| `PAPER_RIDP_KEY` / `PAPER_RIDP_SECRET` | — | RIDP desk's OWN paper account (empty = desk OFF; strict one account per desk — sharing lets desks liquidate each other's shares) |
+| `PAPER_RBT_KEY` / `PAPER_RBT_SECRET` | — | RBT desk's OWN paper account (empty = desk OFF) |
+| `PAPER_SNDK_KEY` / `PAPER_SNDK_SECRET` | — | SNDK scalper's OWN paper account (empty = benched; no fallback) |
 | `ANTHROPIC_API_KEY` | — | Quant agents (idle when empty) |
 | `CLAUDE_SYMBOLS` | `SNDK,MU` | Always-streamed quant symbols (+ SPY/QQQ) |
 | `QUANT_ENTRY_MODEL` / `QUANT_EXIT_MODEL` / `QUANT_REVIEW_MODEL` | haiku / haiku / opus | Agent models |
 | `QUANT_TRAIL_PCT` | `1.5` | Deterministic trailing-stop floor % |
-| `QUANT_LIVE` | `true` | `false` = shadow mode (log only, no paper orders) |
+| `QUANT_EXIT_GRACE_MIN` | `10` | Mechanical grace period: Agent 3 is not consulted for a position's first N minutes (deterministic stops/target/max-hold/EOD still run); 0 = consult from the first tick |
+| `QUANT_BREAKEVEN_R` / `QUANT_CHK_HALF_R` / `QUANT_CHK_FULL_R` / `QUANT_EXIT_NOISE_R` | `0.5` / `0.75` / `0.5` / `0.25` | Mechanical exit rails in units of each trade's planned risk R: breakeven ratchet trigger; mid-grace and grace-end checkpoint loss thresholds (each also requires below-VWAP); minimum loss for an Agent 3 exit_now on a loser to be honored. 0 disables each |
+| `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only — it does NOT bench the signal desk (`QUANT_SIGNALS_LIVE`), the rise watcher flag (`QUANT_RISE_LIVE`), or RIDP; each has its own flag (2026-07 incident: the desk kept trading on QUANT_SIGNALS_LIVE's hidden default) |
 | `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position up to this value overnight (0 = flatten all) |
 | `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe file override |
 | `QUANT_SIGNALS_LIVE` | `true` | Route signal-engine entries to the paper broker (false = shadow only) |
 | `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge model |
 | `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries once day P&L ≈ −cap |
 | `QUANT_TOD_GATE` | `false` | Enforce the time-of-day gate (default shadow-only: journals verdicts, blocks nothing) |
+| `QUANT_RISE_LIVE` | `false` | Rising watcher places paper orders on confirmed post-dip rises (false = shadow: arms + journals + Telegram only) |
+| `QUANT_ALIGN_GATE` | `true` | Trend-alignment gate. Since 2026-07-16 throughput mode it blocks only proven-negative cells (the −228R mkt-up/sym-down cell + retired fh_reversal); `QUANT_ALIGN_STRICT=true` restores the original best-cell-only playbook. See THROUGHPUT_MODE.md for ALL loosened dials + rollback env overrides |
+| `RIDP_LIVE` | `true` | RIDP desk (RIDER + DIPPER, fully deterministic) places paper orders on the paper-claude account; false = shadow journaling |
 | `QUANT_CLF_GATE` | `true` | ML entry gate: nightly LightGBM classifiers reject entries with expected R < 0.03 (fail-open without fresh models) |
 | `QUANT_RETRAIN` | `true` | Auto-run `ml/train_live.py` weekdays ~17:05 ET (+ boot catch-up) to refresh the gate models |
 | `QUANT_STRATEGIST` / `QUANT_STRATEGIST_MODEL` | `true` / `claude-opus-4-8` | Pre-market posture/budget agent |
@@ -455,6 +498,7 @@ Persistence (all gitignored under `backend/data/`): `execution_symbols.json`,
 | GET | `/news?symbols&limit` · `/pressure?symbol` | headlines+sentiment / buy-sell pressure |
 | GET | `/readiness` | account trading-readiness gating + market clock |
 | GET | `/quant` | quant desk report: alloc, state, exit attribution, dip scorecard, agent roster, review |
+| GET | `/ridp` | RIDP desk report: open positions, budget vs live buying power, per-strategy stats, dip setups/triggers, closed trades |
 | GET | `/evals` | eval scoreboard: per-strategy rolling expectancy, demotions, judge calibration (`{enabled:false}` until first compute) |
 | GET | `/proposals` | newest research-loop `proposals_*.json`, or `{pending:[]}` |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
@@ -534,15 +578,26 @@ Checks before considering a change done:
 
 ### 13.2 The signal-trader gauntlet (exact order — a skip is logged with its reason)
 
-`OnSignal → handle` (`signaltrader.go`): **(1)** TOD gate (`EntryAllowed`) — only if
-`QUANT_TOD_GATE=true`; **default OFF/shadow** → passes → **(2)** scoreboard demotion
-(`Demoted`) → **(3)** **clf gate** (`Clf.Score` ≥ margin 0.03) → **(4)** session guard
+`OnSignal → handle` (`signaltrader.go`): **(0)** **trend-alignment playbook**
+(`signals/alignment.go`, `QUANT_ALIGN_GATE=true` default) — each strategy trades only its
+proven (QQQ trend, stock trend) cells from the 12-month regime study (both trends = prev
+close vs SMA20 of prior daily closes, stamped on the signal at publish; unknown trends
+fail open; fh_reversal retired — no allowed cells) → **(1)** TOD gate (`EntryAllowed`) —
+only if `QUANT_TOD_GATE=true`; **default OFF/shadow** → passes → **(2)** scoreboard
+demotion (`Demoted`) — computed over **allowed-cell outcomes only** (`align_ok` on each
+outcome record), so a strategy is judged on its playbook, not on cells it can't trade →
+**(3)** **clf gate** (`Clf.Score` ≥ margin; throughput default 0.0 = any positive EV,
+`QUANT_CLF_MARGIN` overrides; pre-registered original 0.03) → **(4)** session guard
 (reject after 15:30 ET) → **(5)** posture `stand_down` → **(6)** daily loss cap (`risk.Day`)
 → **(7)** allocator `CanFund` (slot/budget/duplicate — cheap, *before* the LLM call) →
 **(8)** **LLM judge** (veto or approve+conviction) → **(9)** cautious posture requires
-conviction ≥ 0.65 → allocator `Size/Fund` → `Manager.OpenPosition(..., EntryContext{signal})`.
+conviction ≥ 0.60 → allocator `Size/Fund` → `Manager.OpenPosition(..., EntryContext{signal})`.
 The **dip pipeline** skips steps 1–3 and 8-as-judge (it uses Agent 2 instead) but shares 4–7
 and the Manager.
+Scoreboard demotion (step 2) has a **probation fast-path** (`evals.go` `probationN`): a
+benched strategy whose last 5 counterfactual outcomes are net positive is reinstated
+immediately — a regime turn must un-bench in hours, not days (added 2026-07-09 after a
+benched dip_bounce went 4-for-4 on the first bounce day while the desk sat at zero trades).
 
 ### 13.3 Fail-open / fail-closed (so "not trading" is not misdiagnosed as a bug)
 
@@ -600,12 +655,20 @@ armed …` · `[signals] time-of-day stats loaded: N buckets`.
 6. **Agents idle.** `ANTHROPIC_API_KEY` empty → judge/Strategist/Reviewer fall back
    (§13.3). Agent 4 needs a local Ollama server.
 7. **Orphaned positions after a restart.** `Rehydrate` should re-adopt + re-stop them —
-   check the startup log; it requires the paper broker enabled.
+   check the startup log; it requires the paper broker enabled. It SKIPS positions whose
+   newest filled buy carries a sibling desk's coid prefix (`ridp_`/`rbt_`/`sndk_`) — on a
+   shared account those are not ours to adopt (2026-07-13/14: it adopted RIDP's reverter
+   positions, canceled their stops as "wrong-size", and Agent 3 sold them).
+8. **Paper desks interfering with each other.** Every desk runs ONLY on its OWN paper
+   account (`PAPER_CLAUDE_*` / `PAPER_RIDP_*` / `PAPER_RBT_*` / `PAPER_SNDK_*`); empty
+   keys = that desk is OFF. There is no fallback/sharing — never point two desks at one
+   account.
 
 ### 13.7 Kill switches for isolation (`.env`, then restart)
 
 `QUANT_SIGNALS_LIVE=false` (signal engine journals only) · `QUANT_CLF_GATE=false` (drop the
-ML gate) · `QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` (re-enable TOD) ·
+ML gate) · `QUANT_ALIGN_GATE=false` (drop the trend-alignment playbook) ·
+`QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` (re-enable TOD) ·
 `QUANT_STRATEGIST=false` · `RESEARCH_LOOP=false` · `QUANT_LIVE=false` (dip pipeline shadow).
 
 ### 13.8 Verify from the shell
@@ -624,10 +687,21 @@ closed" / "the Strategist didn't run" / "nothing traded", **convert to ET** and 
 local time makes it look like off-hours. Holidays are also not modeled: on a US market
 holiday there are no live ticks (blank prices, backfilled charts) — expected, not a bug.
 
-### 13.10 Two-pipeline reminder
+### 13.10 Two-desk reminder (since 2026-07-16)
 
-There are **two entry agents**: **Agent 2** (dip pipeline, from Telegram dip alerts, no ML
-gate) and the **Signal Judge** (signal pipeline, behind the clf gate). They are different
-code, different prompts, both Haiku, both feeding the same allocator + Manager + Agent 3 +
-paper account. Attribute P&L per pipeline via the source tags (`decisions` outcomes and the
-`/api/quant` `dip_score`).
+The quant team is **two desks on two paper accounts**, each with its own allocator
+($8k, equity-capped to its own account), its own Manager (stops/Agent 3/EOD flatten),
+its own Rehydrate, and its own $150/day loss cap:
+
+- **Dip+rise desk** (`PAPER_DIP_*` account): **Agent 2** (dip pipeline, from Telegram dip
+  alerts, no ML gate) + the **rising watcher** (`risewatch.go`, deterministic confirmed
+  post-dip rises, source tag `rise`, gated by `QUANT_RISE_LIVE`). `QUANT_LIVE` gates the
+  dip entries. Empty `PAPER_DIP_*` keys = the whole family stays shadow.
+- **Signal desk** (`PAPER_CLAUDE_*` account): the 6-strategy engine → clf gate → **Signal
+  Judge**, gated by `QUANT_SIGNALS_LIVE`.
+
+Shared and stateless across both: Agent 3 (exit brain), Agent 4, Strategist (its daily
+posture/budget configures BOTH allocators), scoreboard, Reviewer (reads the MERGED state
+of both accounts). Attribute P&L per pipeline via the source tags (`decisions` outcomes
+and `/api/quant` `dip_score`), and per desk via the report's `desks` array (broker-level,
+unarguable).

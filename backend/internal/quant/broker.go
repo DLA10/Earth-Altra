@@ -36,27 +36,41 @@ func NewBroker(base, key, secret string) *Broker {
 func (b *Broker) Enabled() bool { return b != nil && b.key != "" && b.secret != "" }
 
 func (b *Broker) do(method, path string, payload interface{}) ([]byte, int, error) {
-	var body io.Reader
+	var buf []byte
 	if payload != nil {
-		buf, _ := json.Marshal(payload)
-		body = bytes.NewReader(buf)
+		buf, _ = json.Marshal(payload)
 	}
-	req, err := http.NewRequest(method, b.base+path, body)
-	if err != nil {
-		return nil, 0, err
+	attempt := func() ([]byte, int, error) {
+		var body io.Reader
+		if buf != nil {
+			body = bytes.NewReader(buf)
+		}
+		req, err := http.NewRequest(method, b.base+path, body)
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("APCA-API-KEY-ID", b.key)
+		req.Header.Set("APCA-API-SECRET-KEY", b.secret)
+		if buf != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := b.http.Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
+		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
+		return rb, resp.StatusCode, nil
 	}
-	req.Header.Set("APCA-API-KEY-ID", b.key)
-	req.Header.Set("APCA-API-SECRET-KEY", b.secret)
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
+	rb, code, err := attempt()
+	// One retry on rate limiting: a 429 means the request was NOT processed, so any
+	// call (including order posts — coids dedupe anyway) is safe to send again after a
+	// breath. Prevents a single burst from cascading into failed fills/exits.
+	if err == nil && code == http.StatusTooManyRequests {
+		time.Sleep(500 * time.Millisecond)
+		rb, code, err = attempt()
 	}
-	resp, err := b.http.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
-	return rb, resp.StatusCode, nil
+	return rb, code, err
 }
 
 // AccountInfo is the paper account's live capital snapshot.
@@ -64,6 +78,16 @@ type AccountInfo struct {
 	Cash        float64
 	BuyingPower float64
 	Equity      float64 // portfolio value (cash + positions)
+	LastEquity  float64 // equity at the prior trading day's close (Alpaca's number)
+}
+
+// DayPnL is Alpaca's own day profit-and-loss: today's equity vs yesterday's close.
+// Broker-level truth — it includes every share on the account, tracked or not.
+func (a AccountInfo) DayPnL() float64 {
+	if a.LastEquity <= 0 {
+		return 0
+	}
+	return a.Equity - a.LastEquity
 }
 
 // Account fetches the paper account's real cash / buying power / equity so the allocator
@@ -81,6 +105,7 @@ func (b *Broker) Account() (AccountInfo, error) {
 		BuyingPower    string `json:"buying_power"`
 		Equity         string `json:"equity"`
 		PortfolioValue string `json:"portfolio_value"`
+		LastEquity     string `json:"last_equity"`
 	}
 	if err := json.Unmarshal(rb, &a); err != nil {
 		return AccountInfo{}, err
@@ -90,7 +115,7 @@ func (b *Broker) Account() (AccountInfo, error) {
 	if eq == 0 {
 		eq = pf(a.PortfolioValue)
 	}
-	return AccountInfo{Cash: pf(a.Cash), BuyingPower: pf(a.BuyingPower), Equity: eq}, nil
+	return AccountInfo{Cash: pf(a.Cash), BuyingPower: pf(a.BuyingPower), Equity: eq, LastEquity: pf(a.LastEquity)}, nil
 }
 
 func (b *Broker) order(payload map[string]interface{}) (string, error) {
@@ -138,6 +163,33 @@ func (b *Broker) StopSell(sym string, qty, stopPrice float64, coid string) (stri
 	return b.order(map[string]interface{}{
 		"symbol": sym, "qty": wholeQty(qty), "side": "sell", "type": "stop",
 		"stop_price": round2(stopPrice), "time_in_force": "gtc", "client_order_id": coid,
+	})
+}
+
+// StopBuy places a fixed buy stop (used to protect short positions).
+func (b *Broker) StopBuy(sym string, qty, stopPrice float64, coid string) (string, error) {
+	return b.order(map[string]interface{}{
+		"symbol": sym, "qty": wholeQty(qty), "side": "buy", "type": "stop",
+		"stop_price": round2(stopPrice), "time_in_force": "gtc", "client_order_id": coid,
+	})
+}
+
+// MarketBracketOrder places a market entry order with associated take profit and stop loss bracket orders.
+func (b *Broker) MarketBracketOrder(sym string, qty float64, side string, targetPrice, stopPrice float64, coid string) (string, error) {
+	return b.order(map[string]interface{}{
+		"symbol":        sym,
+		"qty":           wholeQty(qty),
+		"side":          side,
+		"type":          "market",
+		"time_in_force": "gtc",
+		"order_class":   "bracket",
+		"take_profit": map[string]interface{}{
+			"limit_price": round2(targetPrice),
+		},
+		"stop_loss": map[string]interface{}{
+			"stop_price": round2(stopPrice),
+		},
+		"client_order_id": coid,
 	})
 }
 

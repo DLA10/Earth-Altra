@@ -393,6 +393,7 @@ export interface DipScorecard {
   avg_confidence: number;
   dip: SourceStat;
   signal: SourceStat;
+  rise: SourceStat;
   rehydrated: SourceStat;
   knife_rate: number;
   verdict: string;
@@ -403,12 +404,24 @@ export interface AgentInfo {
   role: string;
   live: boolean;
 }
+// One desk (paper account) of the quant team: "signal" and "dip+rise" each run their
+// own account, allocator, and daily loss cap.
+export interface QuantDeskReport {
+  name: string;
+  live: boolean;
+  alloc: QuantAllocSnapshot;
+  account_day_pnl: number; // Alpaca: equity − prior close (broker truth)
+  realized_pnl: number;
+  unrealized_pnl: number;
+  trades: number;
+}
 export interface QuantReport {
   live: boolean;
   universe_size: number;
   posture: string;
   alloc: QuantAllocSnapshot;
-  state: QuantStateT;
+  state: QuantStateT; // whole team (both desk accounts merged)
+  desks?: QuantDeskReport[];
   attribution: ExitAttribution;
   dip_score?: DipScorecard;
   agents?: AgentInfo[];
@@ -417,6 +430,34 @@ export interface QuantReport {
 export interface QuantResponse {
   enabled: boolean;
   report?: QuantReport;
+}
+
+// ---- Dip+Rise desk (Agent 2 dips + rise watcher, its own paper account) ----
+export interface RiseArmView {
+  symbol: string;
+  armed_at: string;
+  dip_price: number;
+  dip_low: number;
+  confirm_level: number;
+  expires_in_sec: number;
+  agent2_conf: number;
+}
+export interface DipRiseEvent {
+  time: string;
+  agent: string;
+  event: string;
+  symbol: string;
+  note: string;
+}
+export interface DipRiseReport {
+  enabled: boolean;
+  live: boolean;
+  rise_live: boolean;
+  alloc: QuantAllocSnapshot;
+  state: QuantStateT;
+  dip_score?: DipScorecard;
+  armed: RiseArmView[];
+  events: DipRiseEvent[];
 }
 
 // Eval scoreboard (backend/internal/evals/evals.go) — rolling per-strategy counterfactual
@@ -449,6 +490,60 @@ export interface Scoreboard {
   strategies: StrategyRow[] | null;
   judge: JudgeCalib;
   demoted_set: string[] | null;
+}
+
+// ---- RIDP (Rider & Dipper two-strategy paper desk) ----
+export interface RidpPosition {
+  strategy: "rider" | "dipper";
+  symbol: string;
+  qty: number;
+  entry: number;
+  opened_at: string;
+  peak: number;
+  hard_stop: number;
+  atr: number;
+  tightened: boolean;
+  sessions: number;
+  last: number;
+  unrealized: number;
+  trail_level: number;
+}
+export interface RidpTrade {
+  strategy: string;
+  symbol: string;
+  qty: number;
+  entry: number;
+  exit: number;
+  pnl: number;
+  reason: string;
+  opened_at: string;
+  closed_at: string;
+}
+export interface RidpStratStats {
+  trades: number;
+  wins: number;
+  win_rate: number;
+  realized_pnl: number;
+  avg_pnl: number;
+  today_pnl: number;
+}
+export interface RidpReport {
+  enabled: boolean;
+  live: boolean;
+  account_equity: number;
+  account_last_equity: number; // Alpaca: equity at prior close
+  account_day_pnl: number; // Alpaca: equity − last_equity (broker truth)
+  buying_power: number;
+  deployed: number;
+  open: RidpPosition[] | null;
+  rider: RidpStratStats;
+  dipper: RidpStratStats;
+  dipper_setups: string[] | null;
+  dipper_triggered: string[] | null;
+  closed: RidpTrade[] | null;
+  universe_size: number;
+  reverter_open: RidpPosition[] | null;
+  reverter: RidpStratStats;
 }
 
 export type WsMessage =

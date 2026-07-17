@@ -1042,3 +1042,12 @@ body {
 .rv-block ul { margin: 4px 0 0 18px; }
 .quant-page .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; }
 .quant-page .panel-title { font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+
+/* RBT Styles */
+.direction-badge { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; display: inline-block; text-transform: uppercase; }
+.direction-badge.long { color: #5ff0b5; background: rgba(95, 240, 181, 0.1); border: 1px solid rgba(95, 240, 181, 0.2); }
+.direction-badge.short { color: #ff8a9b; background: rgba(255, 138, 155, 0.1); border: 1px solid rgba(255, 138, 155, 0.2); }
+.reason-badge { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; display: inline-block; }
+.reason-badge.target { color: #5ff0b5; background: rgba(95, 240, 181, 0.1); border: 1px solid rgba(95, 240, 181, 0.2); }
+.reason-badge.stop_loss { color: #ff8a9b; background: rgba(255, 138, 155, 0.1); border: 1px solid rgba(255, 138, 155, 0.2); }
+.reason-badge.time_exit { color: #ffd23f; background: rgba(255, 210, 63, 0.1); border: 1px solid rgba(255, 210, 63, 0.2); }

@@ -10,6 +10,12 @@ import (
 type dailyStats struct {
 	ATR    float64 // daily ATR(14)
 	AvgVol float64 // 20-day average daily volume
+
+	// TrendUp: yesterday's close above the SMA of the prior 20 daily closes (the
+	// rolling trend used by the alignment playbook). HasTrend guards fail-open when
+	// the seed couldn't compute it.
+	TrendUp  bool
+	HasTrend bool
 }
 
 // Store holds each symbol's regular-session 1-minute bars for TODAY plus daily stats,
@@ -36,8 +42,27 @@ func NewStore() *Store {
 // SetDaily installs a symbol's daily ATR / average-volume context.
 func (s *Store) SetDaily(sym string, atr, avgVol float64) {
 	s.mu.Lock()
-	s.daily[sym] = dailyStats{ATR: atr, AvgVol: avgVol}
+	d := s.daily[sym]
+	d.ATR, d.AvgVol = atr, avgVol
+	s.daily[sym] = d
 	s.mu.Unlock()
+}
+
+// SetTrend installs a symbol's rolling daily trend (prev close vs SMA20 of prior closes).
+func (s *Store) SetTrend(sym string, up bool) {
+	s.mu.Lock()
+	d := s.daily[sym]
+	d.TrendUp, d.HasTrend = up, true
+	s.daily[sym] = d
+	s.mu.Unlock()
+}
+
+// Trend returns a symbol's rolling daily trend; ok=false when it was never seeded.
+func (s *Store) Trend(sym string) (up, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d := s.daily[sym]
+	return d.TrendUp, d.HasTrend
 }
 
 // Daily returns a symbol's daily stats (zero values if unseeded).

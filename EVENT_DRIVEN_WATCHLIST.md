@@ -1,7 +1,7 @@
 # CYBERTRON Event-Driven Watchlist
 
-**Date:** 2026-06-10
-**Purpose:** Expanded U.S.-market watchlist for companies that can trend suddenly because of political, geopolitical, military, energy, supply-chain, commodity, policy, aviation, infrastructure, regulatory, technology, credit, or consumer events.
+**Date:** 2026-07-16
+**Purpose:** Expanded U.S.-market watchlist for companies that can trend suddenly because of political, geopolitical, military, energy, supply-chain, commodity, policy, aviation, infrastructure, regulatory, technology, credit, or consumer events. Since 2026-07-16 it also carries **full S&P 500 coverage** (the "S&P 500 Core" departments at the bottom) plus notable new US listings, so the scanner universe tracks the whole large-cap market. No penny stocks — every ticker is verified tradable on Alpaca.
 **Scope:** U.S.-market tradable equities only. This includes NYSE, Nasdaq, NYSE American, and widely traded U.S. ADR/OTC ADR tickers when the ticker itself is available in the U.S. market. It excludes local foreign-exchange tickers.
 
 This is not a ranked momentum list. These stocks may be quiet for long periods, then move sharply when a catalyst appears. Use this as a catalyst watchlist, then apply the normal CYBERTRON entry logic: wait for a clean breakout and manage the trade with a loose 2-3x ATR trailing stop.
@@ -754,3 +754,280 @@ Overlaps are intentional. A stock such as **PLTR**, **AXON**, **CEG**, **VST**, 
 Some names are U.S.-traded ADRs or OTC ADRs rather than U.S.-domiciled common stocks, including **SHEL**, **BP**, **TTE**, **EQNR**, **EADSY**, **RYCEY**, **SAFRY**, **VWAGY**, **BYDDY**, **MBGYY**, **TM**, **HMC**, **RIO**, **BHP**, **VALE**, **SQM**, **ASML**, **TSM**, **CHKP**, and others. Broker support, spreads, margin treatment, and paper-trading availability may vary.
 
 This is a prominent-name watchlist, not a promise that every ticker is liquid enough for every account size. Always check average volume, borrow/margin rules, earnings dates, and whether a ticker has recently changed because of a merger, spin-off, or relisting.
+
+---
+
+# S&P 500 Core Coverage (added 2026-07-16)
+
+Index members not already covered by an event-driven department above. These complete full S&P 500 coverage; every ticker verified tradable on Alpaca.
+
+## S&P 500 Core - Communication Services
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **ECHO** | EchoStar | Wireless Telecommunication Services | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **FOX** | Fox Corporation (Class B) | Broadcasting | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **FOXA** | Fox Corporation (Class A) | Broadcasting | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **GOOG** | Alphabet Inc. (Class C) | Interactive Media & Services | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **LYV** | Live Nation Entertainment | Movies & Entertainment | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **NWS** | News Corp (Class B) | Publishing | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **NWSA** | News Corp (Class A) | Publishing | Ad spending, streaming subscriptions, antitrust, media consolidation |
+| **TKO** | TKO Group Holdings | Movies & Entertainment | Ad spending, streaming subscriptions, antitrust, media consolidation |
+
+## S&P 500 Core - Consumer Discretionary
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **AZO** | AutoZone | Automotive Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **BBY** | Best Buy | Computer & Electronics Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **CVNA** | Carvana | Automotive Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **DASH** | DoorDash | Specialized Consumer Services | Consumer spending, interest rates, tariffs, travel demand |
+| **DECK** | Deckers Brands | Footwear | Consumer spending, interest rates, tariffs, travel demand |
+| **DPZ** | Domino's | Restaurants | Consumer spending, interest rates, tariffs, travel demand |
+| **EBAY** | eBay Inc. | Broadline Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **EXPE** | Expedia Group | Hotels, Resorts & Cruise Lines | Consumer spending, interest rates, tariffs, travel demand |
+| **GPC** | Genuine Parts Company | Distributors | Consumer spending, interest rates, tariffs, travel demand |
+| **GRMN** | Garmin | Consumer Electronics | Consumer spending, interest rates, tariffs, travel demand |
+| **HAS** | Hasbro | Leisure Products | Consumer spending, interest rates, tariffs, travel demand |
+| **ORLY** | O?Reilly Automotive | Automotive Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **RL** | Ralph Lauren Corporation | Apparel, Accessories & Luxury Goods | Consumer spending, interest rates, tariffs, travel demand |
+| **TPR** | Tapestry, Inc. | Apparel, Accessories & Luxury Goods | Consumer spending, interest rates, tariffs, travel demand |
+| **TSCO** | Tractor Supply | Other Specialty Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **ULTA** | Ulta Beauty | Other Specialty Retail | Consumer spending, interest rates, tariffs, travel demand |
+| **WSM** | Williams-Sonoma, Inc. | Homefurnishing Retail | Consumer spending, interest rates, tariffs, travel demand |
+
+## S&P 500 Core - Consumer Staples
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **BF.B** | Brown?Forman | Distillers & Vintners | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **CASY** | Casey's | Food Retail | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **CHD** | Church & Dwight | Household Products | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **CLX** | Clorox | Household Products | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **EL** | Est?e Lauder Companies (The) | Personal Care Products | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **GIS** | General Mills | Packaged Foods & Meats | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **KDP** | Keurig Dr Pepper | Soft Drinks & Non-alcoholic Beverages | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **KVUE** | Kenvue | Personal Care Products | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **MKC** | McCormick & Company | Packaged Foods & Meats | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **MO** | Altria | Tobacco | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **PM** | Philip Morris International | Tobacco | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **STZ** | Constellation Brands | Distillers & Vintners | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **SYY** | Sysco | Food Distributors | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+| **TAP** | Molson Coors Beverage Company | Brewers | Input costs, pricing power, consumer trade-down, GLP-1 impact |
+
+## S&P 500 Core - Energy
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **EXE** | Expand Energy | Oil & Gas Exploration & Production | Oil and gas prices, OPEC decisions, sanctions, LNG demand |
+| **TPL** | Texas Pacific Land Corporation | Oil & Gas Exploration & Production | Oil and gas prices, OPEC decisions, sanctions, LNG demand |
+
+## S&P 500 Core - Financials
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **AIZ** | Assurant | Multi-line Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **AMP** | Ameriprise Financial | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **ARES** | Ares Management | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **BEN** | Franklin Resources | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **BNY** | BNY Mellon | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **CBOE** | Cboe Global Markets | Financial Exchanges & Data | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **CINF** | Cincinnati Financial | Property & Casualty Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **CPAY** | Corpay | Transaction & Payment Processing Services | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **EG** | Everest Group | Reinsurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **ERIE** | Erie Indemnity | Insurance Brokers | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **FDS** | FactSet | Financial Exchanges & Data | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **FIS** | Fidelity National Information Services | Transaction & Payment Processing Services | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **FISV** | Fiserv | Transaction & Payment Processing Services | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **GL** | Globe Life | Life & Health Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **GPN** | Global Payments | Transaction & Payment Processing Services | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **HBAN** | Huntington Bancshares | Regional Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **IBKR** | Interactive Brokers | Investment Banking & Brokerage | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **IVZ** | Invesco | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **JKHY** | Jack Henry & Associates | Transaction & Payment Processing Services | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **L** | Loews Corporation | Multi-line Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **MCO** | Moody's Corporation | Financial Exchanges & Data | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **MRSH** | Marsh McLennan | Insurance Brokers | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **MSCI** | MSCI Inc. | Financial Exchanges & Data | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **NTRS** | Northern Trust | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **PFG** | Principal Financial Group | Life & Health Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **RJF** | Raymond James Financial | Investment Banking & Brokerage | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **SPGI** | S&P Global | Financial Exchanges & Data | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **STT** | State Street Corporation | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **SYF** | Synchrony Financial | Consumer Finance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **TROW** | T. Rowe Price | Asset Management & Custody Banks | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **WRB** | W. R. Berkley Corporation | Property & Casualty Insurance | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+| **WTW** | Willis Towers Watson | Insurance Brokers | Fed rate decisions, credit cycle, bank regulation, capital markets activity |
+
+## S&P 500 Core - Health Care
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **A** | Agilent Technologies | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **ALGN** | Align Technology | Health Care Supplies | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **BAX** | Baxter International | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **BDX** | Becton Dickinson | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **CAH** | Cardinal Health | Health Care Distributors | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **COO** | Cooper Companies (The) | Health Care Supplies | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **COR** | Cencora | Health Care Distributors | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **CRL** | Charles River Laboratories | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **DGX** | Quest Diagnostics | Health Care Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **DVA** | DaVita | Health Care Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **DXCM** | Dexcom | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **EW** | Edwards Lifesciences | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **HSIC** | Henry Schein | Health Care Distributors | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **IDXX** | Idexx Laboratories | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **INCY** | Incyte | Biotechnology | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **IQV** | IQVIA | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **LH** | Labcorp | Health Care Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **MCK** | McKesson Corporation | Health Care Distributors | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **MTD** | Mettler Toledo | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **PODD** | Insulet Corporation | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **RMD** | ResMed | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **RVTY** | Revvity | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **SOLV** | Solventum | Health Care Technology | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **STE** | Steris | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **TECH** | Bio-Techne | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **UHS** | Universal Health Services | Health Care Facilities | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **VEEV** | Veeva Systems | Health Care Technology | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **VTRS** | Viatris | Pharmaceuticals | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **WAT** | Waters Corporation | Life Sciences Tools & Services | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **WST** | West Pharmaceutical Services | Health Care Supplies | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **ZBH** | Zimmer Biomet | Health Care Equipment | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+| **ZTS** | Zoetis | Pharmaceuticals | FDA decisions, drug pricing policy, Medicare/Medicaid changes, clinical trial data |
+
+## S&P 500 Core - Industrials
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **ADP** | Automatic Data Processing | Human Resource & Employment Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **ALLE** | Allegion | Building Products | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **AME** | Ametek | Electrical Components & Equipment | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **AOS** | A. O. Smith | Building Products | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **BR** | Broadridge Financial Solutions | Data Processing & Outsourced Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **CPRT** | Copart | Diversified Support Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **CTAS** | Cintas | Diversified Support Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **EFX** | Equifax | Research & Consulting Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **EME** | Emcor | Construction & Engineering | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **EXPD** | Expeditors International | Air Freight & Logistics | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **FAST** | Fastenal | Trading Companies & Distributors | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **FDXF** | FedEx Freight | Cargo Ground Transportation | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **FIX** | Comfort Systems USA | Construction & Engineering | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **FTV** | Fortive | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **GWW** | W. W. Grainger | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **HONA** | Honeywell Aerospace | Aerospace & Defense | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **IEX** | IDEX Corporation | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **LII** | Lennox International | Building Products | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **NDSN** | Nordson Corporation | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **PAYX** | Paychex | Human Resource & Employment Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **PNR** | Pentair | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **ROL** | Rollins, Inc. | Environmental & Facilities Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **RSG** | Republic Services | Environmental & Facilities Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **SNA** | Snap-on | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **SWK** | Stanley Black & Decker | Industrial Machinery & Supplies & Components | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **UBER** | Uber | Passenger Ground Transportation | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **URI** | United Rentals | Trading Companies & Distributors | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **VLTO** | Veralto | Environmental & Facilities Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **VRSK** | Verisk Analytics | Research & Consulting Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+| **WM** | Waste Management | Environmental & Facilities Services | Infrastructure spending, reshoring capex, PMI cycle, defense budgets |
+
+## S&P 500 Core - Information Technology
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **AAPL** | Apple Inc. | Technology Hardware, Storage & Peripherals | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **ACN** | Accenture | IT Consulting & Other Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **ADSK** | Autodesk | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **AKAM** | Akamai Technologies | Internet Services & Infrastructure | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **APH** | Amphenol | Electronic Components | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **CDNS** | Cadence Design Systems | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **CDW** | CDW Corporation | Technology Distributors | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **CIEN** | Ciena | Communications Equipment | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **CTSH** | Cognizant | IT Consulting & Other Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **FFIV** | F5, Inc. | Communications Equipment | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **FICO** | Fair Isaac | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **FLEX** | Flex Ltd. | Electronic Manufacturing Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **GDDY** | GoDaddy | Internet Services & Infrastructure | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **GLW** | Corning Inc. | Electronic Components | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **HPQ** | HP Inc. | Technology Hardware, Storage & Peripherals | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **INTU** | Intuit | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **IT** | Gartner | IT Consulting & Other Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **JBL** | Jabil | Electronic Manufacturing Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **KEYS** | Keysight Technologies | Electronic Equipment & Instruments | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **LITE** | Lumentum | Communications Equipment | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **MSI** | Motorola Solutions | Communications Equipment | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **PTC** | PTC Inc. | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **Q** | Qnity Electronics | Semiconductor Materials & Equipment | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **ROP** | Roper Technologies | Electronic Equipment & Instruments | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **SNPS** | Synopsys | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **SWKS** | Skyworks Solutions | Semiconductors | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **TDY** | Teledyne Technologies | Electronic Equipment & Instruments | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **TEL** | TE Connectivity | Electronic Manufacturing Services | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **TRMB** | Trimble Inc. | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **TYL** | Tyler Technologies | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **VRSN** | Verisign | Internet Services & Infrastructure | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **WDAY** | Workday, Inc. | Application Software | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+| **ZBRA** | Zebra Technologies | Electronic Equipment & Instruments | Earnings, AI capex cycle, enterprise IT spending, product cycles |
+
+## S&P 500 Core - Materials
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **AMCR** | Amcor | Paper & Plastic Packaging Products & Materials | Commodity prices, China demand, tariffs, construction cycle |
+| **AVY** | Avery Dennison | Paper & Plastic Packaging Products & Materials | Commodity prices, China demand, tariffs, construction cycle |
+| **BALL** | Ball Corporation | Metal, Glass & Plastic Containers | Commodity prices, China demand, tariffs, construction cycle |
+| **CRH** | CRH plc | Construction Materials | Commodity prices, China demand, tariffs, construction cycle |
+| **ECL** | Ecolab | Specialty Chemicals | Commodity prices, China demand, tariffs, construction cycle |
+| **IFF** | International Flavors & Fragrances | Specialty Chemicals | Commodity prices, China demand, tariffs, construction cycle |
+| **LYB** | LyondellBasell | Specialty Chemicals | Commodity prices, China demand, tariffs, construction cycle |
+| **PPG** | PPG Industries | Specialty Chemicals | Commodity prices, China demand, tariffs, construction cycle |
+| **SW** | Smurfit Westrock | Paper & Plastic Packaging Products & Materials | Commodity prices, China demand, tariffs, construction cycle |
+
+## S&P 500 Core - Real Estate
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **ARE** | Alexandria Real Estate Equities | Office REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **BXP** | BXP, Inc. | Office REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **CPT** | Camden Property Trust | Multi-Family Residential REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **CSGP** | CoStar Group | Real Estate Services | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **DOC** | Healthpeak Properties | Health Care REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **ESS** | Essex Property Trust | Multi-Family Residential REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **EXR** | Extra Space Storage | Self-Storage REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **FRT** | Federal Realty Investment Trust | Retail REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **HST** | Host Hotels & Resorts | Hotel & Resort REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **IRM** | Iron Mountain | Other Specialized REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **KIM** | Kimco Realty | Retail REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **MAA** | Mid-America Apartment Communities | Multi-Family Residential REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **REG** | Regency Centers | Retail REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **UDR** | UDR, Inc. | Multi-Family Residential REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **VTR** | Ventas | Health Care REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+| **WY** | Weyerhaeuser | Timber REITs | Interest rates, occupancy trends, refinancing cycle, AI data-center demand |
+
+## S&P 500 Core - Utilities
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **AEE** | Ameren | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **AES** | AES Corporation | Independent Power Producers & Energy Traders | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **ATO** | Atmos Energy | Gas Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **AWK** | American Water Works | Water Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **CMS** | CMS Energy | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **CNP** | CenterPoint Energy | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **DTE** | DTE Energy | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **ED** | Consolidated Edison | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **ES** | Eversource Energy | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **EVRG** | Evergy | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **FE** | FirstEnergy | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **LNT** | Alliant Energy | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **NI** | NiSource | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **PNW** | Pinnacle West Capital | Multi-Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **PPL** | PPL Corporation | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+| **WEC** | WEC Energy Group | Electric Utilities | Power demand, AI data-center load growth, rate cases, extreme weather |
+
+## New US Listings And Notable Non-Index Large Caps
+
+| Ticker | Company | Type | Event Sensitivity |
+|---|---|---|---|
+| **SKHY** | SK hynix (ADR) | Memory semiconductors - HBM/DRAM/NAND | AI memory demand, HBM supply deals, Nasdaq debut 2026-07-10 |
+| **SPCX** | Space Exploration Technologies Class A | Space launch, Starlink | Launch cadence, Starlink growth, government contracts |

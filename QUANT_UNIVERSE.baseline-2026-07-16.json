@@ -1,0 +1,205 @@
+{
+  "updated": "2026-07-09",
+  "note": "Curated quant universe: ~160 liquid, financially solid names. Original trend sectors (DRAM/memory, semiconductors, datacenters, AI infra, software, space, quantum, datacenter power) plus 2026-07-09 broadening: established, profitable large caps in financials, healthcare, consumer/retail staples, industrials/energy, and platforms/telecom. No penny stocks, no unprofitable story names; every symbol is large-cap and deeply liquid.",
+  "context_symbols": [
+    "SPY",
+    "QQQ",
+    "SMH"
+  ],
+  "sectors": {
+    "semiconductors_memory": [
+      "NVDA",
+      "AMD",
+      "AVGO",
+      "TSM",
+      "MU",
+      "SNDK",
+      "WDC",
+      "STX",
+      "MRVL",
+      "QCOM",
+      "INTC",
+      "TXN",
+      "ADI",
+      "NXPI",
+      "ON",
+      "MPWR",
+      "MCHP",
+      "KLAC",
+      "LRCX",
+      "AMAT",
+      "ASML",
+      "ARM",
+      "SMCI",
+      "TER",
+      "ENTG",
+      "ALAB",
+      "CRDO",
+      "RMBS",
+      "ONTO"
+    ],
+    "eda_chip_ip": [
+      "CDNS",
+      "SNPS"
+    ],
+    "optics_networking": [
+      "COHR",
+      "LITE",
+      "CIEN"
+    ],
+    "foundry_packaging": [
+      "GFS",
+      "AMKR"
+    ],
+    "datacenter_cloud_hardware": [
+      "MSFT",
+      "GOOGL",
+      "AMZN",
+      "META",
+      "AAPL",
+      "ORCL",
+      "IBM",
+      "DELL",
+      "HPE",
+      "ANET",
+      "VRT",
+      "CSCO",
+      "NTAP",
+      "PSTG",
+      "EQIX",
+      "DLR"
+    ],
+    "ai_infrastructure": [
+      "CRWV",
+      "NBIS"
+    ],
+    "software_saas": [
+      "CRM",
+      "NOW",
+      "SNOW",
+      "DDOG",
+      "NET",
+      "MDB",
+      "PLTR",
+      "ADBE",
+      "INTU",
+      "WDAY",
+      "TEAM",
+      "HUBS",
+      "ESTC",
+      "CFLT",
+      "DT",
+      "IOT"
+    ],
+    "cybersecurity": [
+      "PANW",
+      "CRWD",
+      "ZS",
+      "FTNT",
+      "OKTA"
+    ],
+    "consumer_tech": [
+      "TSLA",
+      "NFLX",
+      "UBER",
+      "SHOP",
+      "SPOT",
+      "APP"
+    ],
+    "space_defense": [
+      "RKLB",
+      "ASTS",
+      "LMT",
+      "NOC",
+      "RTX",
+      "GD",
+      "LHX",
+      "HEI"
+    ],
+    "quantum": [
+      "IONQ",
+      "QBTS"
+    ],
+    "datacenter_power": [
+      "VST",
+      "CEG",
+      "ETN",
+      "PWR",
+      "NRG"
+    ],
+    "megacap_financials": [
+      "JPM",
+      "V",
+      "MA",
+      "GS",
+      "MS",
+      "BAC",
+      "WFC",
+      "AXP",
+      "BLK",
+      "SPGI",
+      "SCHW",
+      "C",
+      "COF",
+      "PGR"
+    ],
+    "healthcare_pharma": [
+      "UNH",
+      "LLY",
+      "JNJ",
+      "ABBV",
+      "MRK",
+      "TMO",
+      "ABT",
+      "AMGN",
+      "ISRG",
+      "GILD",
+      "VRTX",
+      "PFE",
+      "BSX",
+      "MDT"
+    ],
+    "consumer_retail_staples": [
+      "WMT",
+      "COST",
+      "PG",
+      "KO",
+      "PEP",
+      "MCD",
+      "HD",
+      "LOW",
+      "NKE",
+      "SBUX",
+      "TJX",
+      "PM",
+      "TGT",
+      "CMG"
+    ],
+    "industrials_energy": [
+      "XOM",
+      "CVX",
+      "COP",
+      "CAT",
+      "DE",
+      "GE",
+      "HON",
+      "UPS",
+      "UNP",
+      "EMR",
+      "PH",
+      "ADP",
+      "WM",
+      "SLB"
+    ],
+    "platforms_travel_telecom": [
+      "DIS",
+      "BKNG",
+      "ABNB",
+      "TMUS",
+      "VZ",
+      "T",
+      "MAR",
+      "PYPL"
+    ]
+  }
+}

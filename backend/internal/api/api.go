@@ -69,6 +69,15 @@ type Server struct {
 	// Evals returns the current eval scoreboard (nil-safe; set by main).
 	Evals func() interface{}
 
+	// Ridp returns the RIDP two-strategy paper desk report (nil-safe; set by main).
+	Ridp func() interface{}
+
+	// Rbt returns the RBT paper desk report (nil-safe; set by main).
+	Rbt func() interface{}
+
+	// Sndk returns the SNDK paper desk report (nil-safe; set by main).
+	Sndk func() interface{}
+
 	// movers-news badge cache (Alpaca-only, cheap): short TTL keeps the board snappy.
 	mnMu   sync.Mutex
 	mnResp *MoversNews
@@ -223,6 +232,10 @@ func (s *Server) Routes(r chi.Router) {
 
 	// Quant pipeline (the AI paper-trading team): full report for the Paper·Claude page.
 	r.Get("/api/quant", s.quantReport)
+	r.Get("/api/diprise", s.dipRiseReport)
+	r.Get("/api/ridp", s.ridpReport)
+	r.Get("/api/rbt", s.rbtReport)
+	r.Get("/api/sndk", s.sndkReport)
 
 	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
 	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {

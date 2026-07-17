@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -31,6 +32,7 @@ type Strategist struct {
 	dlog     *DecisionLog
 	marketFn func() (MarketState, error) // deterministic pre-market inputs
 	reload   func()                      // e.g. universe.Reload + allocator reconfigure
+	symbols  []string                    // tradable symbols from the master watchlist
 }
 
 // MarketState is the deterministic pre-market picture handed to the model.
@@ -43,14 +45,59 @@ type MarketState struct {
 	PrevDayQqq   float64 `json:"qqq_prev_day_pct"`
 }
 
-func NewStrategist(client *Anthropic, model, dataDir string, loc *time.Location, dlog *DecisionLog, marketFn func() (MarketState, error), reload func()) *Strategist {
+func NewStrategist(client *Anthropic, model, dataDir string, loc *time.Location, dlog *DecisionLog, marketFn func() (MarketState, error), reload func(), symbols []string) *Strategist {
 	if strings.TrimSpace(model) == "" {
 		model = "claude-opus-4-8"
 	}
 	if loc == nil {
 		loc = time.UTC
 	}
-	return &Strategist{client: client, model: model, dataDir: dataDir, loc: loc, dlog: dlog, marketFn: marketFn, reload: reload}
+	return &Strategist{
+		client:   client,
+		model:    model,
+		dataDir:  dataDir,
+		loc:      loc,
+		dlog:     dlog,
+		marketFn: marketFn,
+		reload:   reload,
+		symbols:  symbols,
+	}
+}
+
+// loadUniverseSymbols reads and parses the first available master watchlist json file.
+func loadUniverseSymbols(candidates ...string) []string {
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, err := os.Stat(c); err != nil {
+			continue
+		}
+		b, err := os.ReadFile(c)
+		if err != nil {
+			continue
+		}
+		var u struct {
+			Sectors map[string][]string `json:"sectors"`
+		}
+		if err := json.Unmarshal(b, &u); err != nil {
+			continue
+		}
+		var syms []string
+		for _, sList := range u.Sectors {
+			for _, sym := range sList {
+				s := strings.ToUpper(strings.TrimSpace(sym))
+				if s != "" {
+					syms = append(syms, s)
+				}
+			}
+		}
+		if len(syms) > 0 {
+			sort.Strings(syms)
+			return syms
+		}
+	}
+	return nil
 }
 
 var strategistSchema = map[string]interface{}{
@@ -159,6 +206,30 @@ func (s *Strategist) Generate(day string) error {
 		maxConc = 3
 	}
 
+	symbols := s.symbols
+	if len(symbols) == 0 {
+		symbols = loadUniverseSymbols("../QUANT_UNIVERSE.json", "QUANT_UNIVERSE.json", filepath.Join(s.dataDir, "../QUANT_UNIVERSE.json"))
+	}
+
+	var universeEntries []UniverseEntry
+	for _, sym := range symbols {
+		sUpper := strings.ToUpper(strings.TrimSpace(sym))
+		if sUpper == "" || sUpper == "SPY" || sUpper == "QQQ" || sUpper == "SMH" {
+			continue
+		}
+		universeEntries = append(universeEntries, UniverseEntry{
+			Symbol:        sUpper,
+			Tier:          1,
+			Catalyst:      "Sector trend candidate",
+			SentimentLean: "neutral",
+			RiskFlags:     []string{},
+			Notes:         "automatically copied from master list",
+		})
+	}
+	if len(universeEntries) == 0 {
+		universeEntries = []UniverseEntry{}
+	}
+
 	du := DailyUniverse{
 		Date:        day,
 		GeneratedAt: time.Now().In(s.loc).Format("15:04"),
@@ -169,7 +240,7 @@ func (s *Strategist) Generate(day string) error {
 		},
 		Allocation: Allocation{BudgetUSD: budget, PerPositionUSD: perPos, MaxConcurrent: maxConc,
 			Notes: "strategist-generated; clamped in code"},
-		Universe: []UniverseEntry{}, // dip pipeline stays idle unless a human curates names
+		Universe: universeEntries,
 		Excluded: []Excluded{},
 	}
 	b, err := json.MarshalIndent(du, "", "  ")
@@ -203,16 +274,19 @@ func (s *Strategist) freshFor(day string) bool {
 	return json.Unmarshal(b, &du) == nil && du.Date == day
 }
 
-// fallback is the pure-rules config used when the LLM is unavailable.
+// fallback is the pure-rules config used when the LLM is unavailable. Below-MA alone is
+// NOT cautious anymore (the 12-month regime study showed the desk earns on below-MA days
+// and the alignment gate picks the right strategy families per regime); caution is about
+// disorder — elevated vol or a sharp red day — and stand-down is for crash tapes.
 func (s *Strategist) fallback(ms MarketState) (string, float64, float64, int, string) {
 	posture := "normal"
-	if !ms.QqqAbove20d {
+	if ms.QqqATRPct > 3 || ms.PrevDayQqq < -2.5 {
 		posture = "cautious"
 	}
-	if !ms.QqqAbove20d && ms.QqqPct5d < -3 {
+	if ms.QqqPct5d < -5 && ms.QqqATRPct > 3.5 {
 		posture = "stand_down"
 	}
-	return posture, 8000, 2000, 3, "rules fallback (LLM unavailable): posture from QQQ 20d-MA state"
+	return posture, 8000, 2000, 3, "rules fallback (LLM unavailable): posture from volatility/crash state (alignment gate handles regime)"
 }
 
 func bias(pct float64) string {
@@ -253,21 +327,27 @@ You do NOT have the economic calendar or news access. If volatility is elevated 
 high) or the tape just broke trend, assume event risk exists and lean cautious.
 
 POSTURE (gates how aggressively the desk trades — hard rules downstream):
-- "normal": trend intact (above 20d MA), orderly vol. Full operation.
-- "cautious": below the 20d MA, elevated vol, a heavy losing streak on the scoreboard, or a
-  broken tape yesterday. Downstream, entries then require higher conviction and you should
-  usually trim per_position_usd and/or max_concurrent.
-- "stand_down": trend broken AND falling hard (e.g. QQQ well below the 20d MA and down sharply
-  over 5 days), or vol is extreme. Long-only dip/momentum strategies have no business trading
-  such a tape. No new entries all day.
+- "normal": orderly vol, whether QQQ is above OR below its 20d MA. IMPORTANT — a below-MA
+  tape is NOT by itself a reason to cut: the desk's 12-month regime study (22k outcomes)
+  shows its strategies EARN most on below-MA days (+144R) and bleed on above-MA days
+  (−624R), and a deterministic trend-alignment gate downstream already selects which
+  strategy families may trade each regime. Trust it; keep normal allocation.
+- "cautious": DISORDERLY conditions — elevated/expanding vol (qqq_atr_pct high), a sharp
+  falling-knife day yesterday, or a heavy losing streak on the scoreboard. Downstream,
+  entries then require higher conviction and you should trim per_position_usd and/or
+  max_concurrent. Caution is about chaos, not direction.
+- "stand_down": crash conditions — QQQ down very sharply over 5 days AND vol extreme.
+  No new entries all day.
 
 ALLOCATION (clamped in code regardless: budget ≤ $8000, per-position ≤ $2500, concurrent ≤ 3):
 - normal day: budget 8000, per_position 2000, max_concurrent 3.
 - cautious: cut per_position to ~1000-1500 and/or max_concurrent to 2.
 - stand_down: allocation is moot (entries are blocked) — set conservative values anyway.
 
-Weigh the scoreboard: if a strategy family is bleeding (negative mean_r, demotions), that is
-evidence the current regime is hostile to the desk's style — lean cautious even on a green tape.
+Weigh the scoreboard: if MOST strategy families are bleeding (negative mean_r, demotions),
+that is evidence the tape is hostile to the desk as a whole — lean cautious even on a green
+tape. A single bleeding family is the alignment gate's and scoreboard's job, not a posture
+reason.
 
 notes: ONE plain-English line a novice can read explaining today's call. No hedging lists.
 Call record_daily_config.`

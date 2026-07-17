@@ -187,6 +187,10 @@ func (e *Engine) SectorLeadLag(sym string) map[string]float64 {
 // SeedDaily installs a symbol's daily ATR / avg-volume context (startup REST seed).
 func (e *Engine) SeedDaily(sym string, atr, avgVol float64) { e.store.SetDaily(sym, atr, avgVol) }
 
+// SeedTrend installs a symbol's rolling daily trend (prev close vs SMA20 of prior
+// closes) for the alignment playbook. Unseeded symbols fail open (no alignment verdict).
+func (e *Engine) SeedTrend(sym string, up bool) { e.store.SetTrend(sym, up) }
+
 // SeedBars replays today's backfilled session bars into the store (no detection — live
 // signals begin with the first streamed bar, so a restart can't re-fire old setups).
 func (e *Engine) SeedBars(sym string, bars []Bar) {
@@ -311,6 +315,14 @@ func (e *Engine) publish(sig Signal) {
 	e.seq++
 	sig.ID = fmt.Sprintf("%s-%s-%d-%d", sig.Strategy, sig.Symbol, sig.Time, e.seq)
 	sig.Sector = e.uni.Sector(sig.Symbol)
+	// Trend-alignment verdict (fail-open when either trend is unseeded).
+	if mktUp, ok1 := e.store.Trend("QQQ"); ok1 {
+		if symUp, ok2 := e.store.Trend(sig.Symbol); ok2 {
+			sig.TrendCell = trendCell(mktUp, symUp)
+			allowed := AlignmentAllowed(sig.Strategy, mktUp, symUp)
+			sig.AlignOK = &allowed
+		}
+	}
 	todBlocked := e.todBlocked(sig.Strategy, bucket)
 	e.pending = append(e.pending, &pendingOutcome{sig: sig, todBucket: bucket})
 	onSignal := e.OnSignal
@@ -374,7 +386,7 @@ func (e *Engine) resolveOutcomes(sym string, b Bar) {
 		}
 		e.tod[tk].update(r, todDecayHalflife)
 		e.saveTOD()
-		due = append(due, map[string]interface{}{
+		rec := map[string]interface{}{
 			"type":          "outcome",
 			"id":            p.sig.ID,
 			"strategy":      p.sig.Strategy,
@@ -386,7 +398,14 @@ func (e *Engine) resolveOutcomes(sym string, b Bar) {
 			"r_multiple":    r,
 			"pnl_per_share": exit - p.sig.Suggested.Entry,
 			"minutes_held":  (b.Time - p.sig.Time) / 60,
-		})
+		}
+		// Carry the alignment verdict onto the outcome so the eval scoreboard can
+		// score each strategy on its playbook cells only.
+		if p.sig.AlignOK != nil {
+			rec["align_ok"] = *p.sig.AlignOK
+			rec["trend_cell"] = p.sig.TrendCell
+		}
+		due = append(due, rec)
 	}
 	e.pending = kept
 	e.mu.Unlock()

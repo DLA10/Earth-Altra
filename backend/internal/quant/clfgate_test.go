@@ -19,8 +19,15 @@ func TestClfGateParityAgainstTrainedModels(t *testing.T) {
 	if !g.Ready() {
 		t.Fatal("models exist on disk but none passed parity/staleness verification — see [clf-gate] logs")
 	}
-	if m := g.Margin(); m != 0.03 {
-		t.Fatalf("margin = %v, want the pre-registered 0.03", m)
+	// Throughput mode (2026-07-16): default margin is 0.0 — any positive-EV entry passes.
+	if m := g.Margin(); m != 0.0 {
+		t.Fatalf("margin = %v, want the throughput-mode default 0.0", m)
+	}
+	// Rollback path: QUANT_CLF_MARGIN restores the pre-registered 0.03 without code.
+	t.Setenv("QUANT_CLF_MARGIN", "0.03")
+	g2 := NewClfGate("../../data/models")
+	if m := g2.Margin(); m != 0.03 {
+		t.Fatalf("margin with QUANT_CLF_MARGIN=0.03 = %v, want 0.03", m)
 	}
 	// One live-shaped scoring call: a vwap_reclaim signal with a 1.5R bracket must come
 	// back scored, with a finite EV in a sane range.

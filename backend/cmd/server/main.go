@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os/exec"
 	"context"
 	"encoding/json"
 	"flag"
@@ -11,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -33,6 +33,9 @@ import (
 	"live-optimus/backend/internal/gemini"
 	"live-optimus/backend/internal/hub"
 	"live-optimus/backend/internal/quant"
+	"live-optimus/backend/internal/rbt"
+	"live-optimus/backend/internal/sndk"
+	"live-optimus/backend/internal/ridp"
 	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
 	"live-optimus/backend/internal/signals"
@@ -93,7 +96,8 @@ func main() {
 	// always see fresh candles (incl. across SIP reconnects). SPY/QQQ provide the
 	// market-context backdrop the entry/exit agents read on every decision.
 	var paperSymbols []string
-	if cfg.PaperClaudeKey != "" && cfg.PaperClaudeSecret != "" {
+	if (cfg.PaperClaudeKey != "" && cfg.PaperClaudeSecret != "") ||
+		(cfg.PaperDipKey != "" && cfg.PaperDipSecret != "") {
 		paperSymbols = unionSymbols(cfg.ClaudeSymbols, []string{"SPY", "QQQ"})
 	}
 
@@ -236,6 +240,7 @@ func main() {
 	dw := dipwatch.New(cfg.TelegramBotToken, cfg.TelegramChatID, watchMgr.All, engine, client)
 
 	var quantEngine *quant.Engine        // exposed to the API after srv is built
+	var quantManagers []*quant.Manager   // both desk managers — wired to EnsureLive after srv is built
 	var evalsFn func() interface{}       // eval scoreboard accessor for /api/evals
 	// AI quant pipeline — Agent 2 (entry decision) in SHADOW mode. On each confirmed dip, if the
 	// symbol is in today's curated universe (backend/data/daily_universe.json), Opus decides
@@ -248,8 +253,14 @@ func main() {
 			etz = time.UTC
 		}
 		qUniverse := quant.NewUniverse("data")
+		// TWO desks, TWO capital pots: qAlloc funds the DIP+RISE desk (Agent 2 dips + the
+		// rise watcher, on the PAPER_DIP account); sigAlloc funds the SIGNAL desk (the
+		// 6-strategy engine, on the PAPER_CLAUDE account). Same configured budget each;
+		// each is equity-capped to its OWN account below.
 		qAlloc := quant.NewAllocator()
 		qAlloc.Configure(qUniverse.Allocation())
+		sigAlloc := quant.NewAllocator()
+		sigAlloc.Configure(qUniverse.Allocation())
 		qLog := quant.NewDecisionLog("data", etz)
 		qAnth := quant.NewAnthropic(cfg.AnthropicAPIKey)
 		qAgent2 := quant.NewAgent2(qAnth, cfg.QuantEntryModel) // default Haiku 4.5
@@ -287,6 +298,7 @@ func main() {
 				case <-t.C:
 					if qUniverse.Reload() == nil {
 						qAlloc.Configure(qUniverse.Allocation())
+						sigAlloc.Configure(qUniverse.Allocation())
 					}
 				}
 			}
@@ -300,26 +312,34 @@ func main() {
 			})
 		})
 
-		// Execution: Agent 3 (Haiku exit) + paper broker + position manager (deterministic
-		// trailing-stop floor at fill, then Agent 3 manages the exit). Live order placement is
-		// gated by QUANT_LIVE (default true) AND a configured key/broker; otherwise shadow.
+		// Execution: Agent 3 (exit) + per-desk paper brokers + per-desk position managers
+		// (deterministic trailing-stop floor at fill, then Agent 3 manages the exit).
+		// dipBroker/qMgr = the DIP+RISE desk (PAPER_DIP account); sigBroker/sigMgr = the
+		// SIGNAL desk (PAPER_CLAUDE account). Agent 3 itself is stateless and shared.
 		qAgent3 := quant.NewAgent3(qAnth, cfg.QuantExitModel)
-		qBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperClaudeKey, cfg.PaperClaudeSecret)
-		qMgr := quant.NewManager(qEngine, qBroker, qAgent3, cfg.QuantTrailPct, cfg.QuantOvernightCap)
-		qEngine.SetExecution(qBroker, qMgr)
+		dipBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperDipKey, cfg.PaperDipSecret)
+		sigBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperClaudeKey, cfg.PaperClaudeSecret)
+		qMgr := quant.NewManager(qEngine, qAlloc, dipBroker, qAgent3, cfg.QuantTrailPct, cfg.QuantOvernightCap)
+		sigMgr := quant.NewManager(qEngine, sigAlloc, sigBroker, qAgent3, cfg.QuantTrailPct, cfg.QuantOvernightCap)
+		quantManagers = append(quantManagers, qMgr, sigMgr)
+		qEngine.SetExecution(dipBroker, qMgr)
+		qEngine.SetSignalExecution(sigBroker, sigAlloc, cfg.QuantSignalsLive && sigBroker.Enabled())
 		qEngine.SetContext(ctx)
 
-		// Keep the allocator's budget capped at the paper account's REAL equity, so the
-		// desk never tries to deploy more cash than the account actually holds (e.g. after
-		// a drawdown). Sync once now, before any entry, then every 60s.
-		if qBroker.Enabled() {
+		// Keep each desk's allocator budget capped at ITS account's REAL equity, so a desk
+		// never tries to deploy more cash than its account actually holds (e.g. after a
+		// drawdown). Sync once now, before any entry, then every 60s.
+		syncDesk := func(name string, b *quant.Broker, a *quant.Allocator) {
+			if !b.Enabled() {
+				return
+			}
 			syncEquity := func() {
-				if ai, err := qBroker.Account(); err == nil && ai.Equity > 0 {
-					qAlloc.SetEquityCeiling(ai.Equity)
+				if ai, err := b.Account(); err == nil && ai.Equity > 0 {
+					a.SetEquityCeiling(ai.Equity)
 				}
 			}
 			syncEquity()
-			log.Printf("quant: allocator synced to paper account equity (budget capped at real cash)")
+			log.Printf("quant: %s desk allocator synced to its paper account equity", name)
 			go func() {
 				t := time.NewTicker(60 * time.Second)
 				defer t.Stop()
@@ -333,44 +353,64 @@ func main() {
 				}
 			}()
 		}
+		syncDesk("dip+rise", dipBroker, qAlloc)
+		syncDesk("signal", sigBroker, sigAlloc)
 
-		// Restart resilience: re-adopt any position that survived a process restart —
-		// re-attach (or freshly place) its protective stop, re-fund the allocator so the
-		// shared budget can't be oversubscribed, and resume its Agent-3 manage loop.
-		// Runs BEFORE any entry source (dip hook / signal trader) can act.
+		// Restart resilience, per desk: re-adopt any position that survived a process
+		// restart — re-attach (or freshly place) its protective stop, re-fund that desk's
+		// allocator, and resume its Agent-3 manage loop. Runs BEFORE any entry source
+		// (dip hook / signal trader) can act.
 		if n := qMgr.Rehydrate(ctx); n > 0 {
-			log.Printf("quant: rehydrated %d open position(s) from the paper account", n)
+			log.Printf("quant: rehydrated %d open position(s) on the dip+rise account", n)
+		}
+		if n := sigMgr.Rehydrate(ctx); n > 0 {
+			log.Printf("quant: rehydrated %d open position(s) on the signal account", n)
 		}
 
-		// Daily post-market review (Opus): reads the decision log + reconstructed trades, writes a
-		// structured report to backend/data/reviews/ for the next pre-market session to learn from.
+		// Daily post-market review (Opus): reads the decision log + the MERGED trades of
+		// both desk accounts, writes a structured report to backend/data/reviews/.
 		qReviewer := quant.NewReviewer(qAnth, cfg.QuantReviewModel, qLog,
-			func() quant.QuantState {
-				if !qBroker.Enabled() {
-					return quant.QuantState{}
-				}
-				st, _ := qBroker.Reconstruct(qEngine.LastClose)
-				return st
-			},
-			"data", etz)
+			qEngine.MergedState, "data", etz)
 		go qReviewer.RunDaily(ctx)
 
-		if cfg.QuantLive && qAgent2.Enabled() && qBroker.Enabled() {
+		if cfg.QuantLive && qAgent2.Enabled() && dipBroker.Enabled() {
 			qEngine.SetLive(true)
-			log.Printf("quant: LIVE (paper) | entry=%s exit=%s trail=%.1f%% | universe=%d symbols",
+			log.Printf("quant: dip+rise desk LIVE (paper) | entry=%s exit=%s trail=%.1f%% | universe=%d symbols",
 				cfg.QuantEntryModel, cfg.QuantExitModel, cfg.QuantTrailPct, len(qUniverse.Symbols()))
+		} else if cfg.QuantLive && qAgent2.Enabled() {
+			log.Printf("quant: dip+rise desk SHADOW — QUANT_LIVE=true but no PAPER_DIP keys (set PAPER_DIP_KEY/SECRET to arm it)")
 		} else if qAgent2.Enabled() {
-			log.Printf("quant: SHADOW mode (set QUANT_LIVE=true + paper keys to place orders) | universe=%d", len(qUniverse.Symbols()))
+			log.Printf("quant: dip+rise desk SHADOW (set QUANT_LIVE=true + PAPER_DIP keys to place orders) | universe=%d", len(qUniverse.Symbols()))
 		} else {
 			log.Printf("quant: idle (set ANTHROPIC_API_KEY); dip hook installed")
 		}
+		// QUANT_LIVE only benches the DIP+RISE desk. Say so loudly when the signal desk is
+		// still live, so "I benched the quant desk" can't silently mean "only half of it"
+		// (the 2026-07 incident: QUANT_SIGNALS_LIVE was absent and defaulted to true).
+		if !cfg.QuantLive && cfg.QuantSignalsLive && sigBroker.Enabled() {
+			log.Printf("quant: ⚠ NOTE — dip+rise desk is SHADOW (QUANT_LIVE=false) but the SIGNAL desk is still LIVE; set QUANT_SIGNALS_LIVE=false to bench the whole team")
+		}
+
+		// Dip+rise desk daily loss cap (same $ cap as the signal desk, tracked separately):
+		// approximate realized P&L from every close on THIS desk; once −cap is hit, new dip
+		// and rise entries are skipped until tomorrow.
+		dipLimits := risk.Defaults()
+		dipLimits.DailyLossCapUSD = cfg.QuantDailyLossCap
+		dipDay := risk.NewDay(dipLimits, etz)
+		qMgr.OnClosed = func(sym string, pnl float64) {
+			dipDay.OnRealized(pnl, time.Now())
+			if realized, halted := dipDay.Realized(time.Now()); halted {
+				log.Printf("[dip-desk] DAILY LOSS CAP HIT (day P&L ≈ $%.2f) — no more dip/rise entries today", realized)
+			}
+		}
+		qEngine.SetDayRisk(dipDay)
 
 		// ---- Signal-engine paper execution (the validated Tier-1 champion config) ----
 		// Bridge: signal → learned time-of-day gate → LLM entry judge (red-flag veto +
-		// conviction sizing) → shared allocator → Manager (entry, trailing-stop floor,
-		// Agent 3 exits, EOD flatten) → Claude PAPER account. Shares the allocator with
-		// the dip pipeline so the two can never oversubscribe the $8k budget. The
-		// dipwatch Telegram flow is untouched.
+		// conviction sizing) → the SIGNAL desk's own allocator → its own Manager (entry,
+		// trailing-stop floor, Agent 3 exits, EOD flatten) → the PAPER_CLAUDE account.
+		// Fully separate from the dip+rise desk's account/budget/loss cap. The dipwatch
+		// Telegram flow is untouched.
 		// ---- Eval scoreboard (QUANT_VISION §5): rolling strategy expectancy, CUSUM ----
 		// watchdog, judge calibration; recomputed every 10 min, persisted, served at
 		// /api/evals, and enforced as strategy demotion in the signal trader.
@@ -414,11 +454,11 @@ func main() {
 			clfGate = quant.NewClfGate("data/models")
 		}
 
-		if sigEngine != nil && qBroker.Enabled() {
+		if sigEngine != nil && sigBroker.Enabled() {
 			judge := quant.NewSignalJudge(qAnth, cfg.QuantJudgeModel)
 			limits := risk.Defaults()
 			limits.DailyLossCapUSD = cfg.QuantDailyLossCap
-			trader := quant.NewSignalTrader(ctx, qEngine, qMgr, sigEngine, judge, limits, cfg.QuantSignalsLive, cfg.QuantTODGate)
+			trader := quant.NewSignalTrader(ctx, qEngine, sigAlloc, sigMgr, sigEngine, judge, limits, cfg.QuantSignalsLive, cfg.QuantTODGate, cfg.QuantAlignGate)
 			trader.Clf = clfGate
 			trader.Demoted = func(strategy string) bool {
 				sbMu.RLock()
@@ -431,13 +471,38 @@ func main() {
 				if !cfg.QuantTODGate {
 					todMode = "shadow-only"
 				}
-				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate %s | scoreboard demotion active",
-					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap, todMode)
+				alignMode := "enforcing"
+				if !cfg.QuantAlignGate {
+					alignMode = "off"
+				}
+				log.Printf("signal-trader: LIVE (paper) | judge=%s (enabled=%v) | daily loss cap $%.0f | TOD gate %s | alignment playbook %s | scoreboard demotion active",
+					cfg.QuantJudgeModel, judge.Enabled(), cfg.QuantDailyLossCap, todMode, alignMode)
 			} else {
 				log.Printf("signal-trader: disabled (QUANT_SIGNALS_LIVE=false) — shadow journaling only")
 			}
 		} else if sigEngine != nil {
 			log.Printf("signal-trader: no paper broker keys — shadow journaling only")
+		}
+
+		// ---- Rising watcher: monetize confirmed post-dip bounces Agent 2 passed on ----
+		// Every in-universe dip Agent 2 declines is armed for 10 minutes; a green 1-min
+		// close +0.10% above the dip price — with the dip low intact and no volume fade —
+		// confirms the rise and enters with deterministic, time-boxed exits (1.5% trail,
+		// +2R target, 40-min max hold). Rule validated on a month-long replay of the
+		// dipwatch recipe (391 reconstructed dips). No LLM on this path. Part of the
+		// DIP+RISE desk: shares its allocator, loss cap, Manager, and PAPER_DIP account;
+		// gated by QUANT_RISE_LIVE (false = shadow: journals + Telegram, no orders).
+		riseLive := cfg.QuantRiseLive && dipBroker.Enabled()
+		riseWatch := quant.NewRiseWatch(qEngine, qMgr, dipDay, etz, riseLive, dw.Notify)
+		qEngine.SetRiseWatch(riseWatch)
+		riseWatch.Start(ctx)
+		switch {
+		case riseLive:
+			log.Printf("rise-watch: LIVE (paper) | confirm = green 1-min close +0.10%% within 10m, dip low holds, no volume fade | trail 1.5%% | target +2R | max hold 40m")
+		case cfg.QuantRiseLive:
+			log.Printf("rise-watch: SHADOW — QUANT_RISE_LIVE=true but no PAPER_DIP keys (set PAPER_DIP_KEY/SECRET to arm the dip+rise desk)")
+		default:
+			log.Printf("rise-watch: SHADOW (set QUANT_RISE_LIVE=true to place paper orders) — arms declined dips, journals every trigger")
 		}
 
 		// ---- Strategist agent: pre-market posture + allocation → daily_universe.json ----
@@ -451,9 +516,11 @@ func main() {
 			}
 			strategist := quant.NewStrategist(qAnth, cfg.QuantStrategistModel, "data", etz, qLog, marketFn, func() {
 				if qUniverse.Reload() == nil {
+					// The Strategist's posture/budget applies to BOTH desks.
 					qAlloc.Configure(qUniverse.Allocation())
+					sigAlloc.Configure(qUniverse.Allocation())
 				}
-			})
+			}, sigSymbols)
 			go strategist.RunDaily(ctx)
 			log.Printf("strategist: armed (weekdays 08:50-09:25 ET, model=%s, llm=%v)", cfg.QuantStrategistModel, qAnth.Enabled())
 		}
@@ -504,6 +571,106 @@ func main() {
 
 	srv.Quant = quantEngine
 	srv.Evals = evalsFn
+
+	// Sub-second position P&L on the quant pages: subscribe each desk position's
+	// trades/quotes when it opens (and any already-rehydrated survivors right now).
+	// Signal-universe symbols otherwise get 1-minute bars only, which made open-position
+	// prices look frozen on the frontend while the backend was fine.
+	for _, m := range quantManagers {
+		m.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+	}
+
+	// ---- RIDP: the two-strategy deterministic paper desk (RIDER + DIPPER) ----
+	// The operator's two validated patterns, no LLM anywhere on the trade path, pure-code
+	// budget allocation against its paper account's live buying power. Runs side by side
+	// with (and never touches) the AI quant desk; order attribution via "ridp_" coids.
+	// STRICT one-account-per-desk: RIDP runs only on its OWN keys (PAPER_RIDP_*) — no
+	// fallback to a shared account (on a shared account the desks liquidate each other's
+	// shares and starve each other's buying power; the 2026-07-13/14 incident).
+	if cfg.PaperRidpKey != "" && cfg.PaperRidpSecret != "" {
+		etzRidp, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzRidp = time.UTC
+		}
+		ridpBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperRidpKey, cfg.PaperRidpSecret)
+		ridpDaily := func(symbols []string, n int) (map[string][]ridp.DailyBar, error) {
+			raw, err := client.GetMultiDailyBars(symbols, n)
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string][]ridp.DailyBar, len(raw))
+			for sym, bars := range raw {
+				db := make([]ridp.DailyBar, 0, len(bars))
+				for _, b := range bars {
+					db = append(db, ridp.DailyBar{Day: b.Time.In(etzRidp).Format("2006-01-02"),
+						Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume})
+				}
+				out[sym] = db
+			}
+			return out, nil
+		}
+		ridpMgr := ridp.New(ridpBroker, engine, sigSymbols, etzRidp, "data", cfg.RidpLive, ridpDaily)
+		ridpMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		// Time-of-day-aware RVOL for RIDER: build each symbol's intraday cumulative-volume
+		// curve from ~12 days of 1-minute bars (U-shaped: heavy open/close, light midday) so
+		// the "2x normal for this time of day" gate is honest instead of assuming volume
+		// accrues linearly. Background-safe: RIDER uses a flat fallback until this lands.
+		go func() {
+			hist, err := client.GetMultiIntradayBars(sigSymbols, time.Now().AddDate(0, 0, -12), time.Now())
+			if err != nil {
+				log.Printf("ridp: volume-profile fetch error: %v", err)
+				return
+			}
+			profs := make(map[string][]float64, len(hist))
+			for sym, bars := range hist {
+				vb := make([]ridp.VolBar, 0, len(bars))
+				for _, b := range bars {
+					vb = append(vb, ridp.VolBar{Time: b.Time.Unix(), Volume: b.Volume})
+				}
+				if p := ridp.BuildVolumeProfile(etzRidp, vb); p != nil {
+					profs[sym] = p
+				}
+			}
+			ridpMgr.SetVolumeProfiles(profs)
+		}()
+		ridpMgr.Start(ctx)
+		srv.Ridp = func() interface{} { return ridpMgr.Report() }
+	} else {
+		log.Printf("ridp: disabled (no PAPER_RIDP keys — strict one account per desk)")
+	}
+
+	// RBT (Rubber Band Trading) mean-reversion paper desk
+	if cfg.PaperRbtKey != "" && cfg.PaperRbtSecret != "" {
+		etzRbt, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzRbt = time.UTC
+		}
+		rbtBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperRbtKey, cfg.PaperRbtSecret)
+		rbtMgr := rbt.New(rbtBroker, engine, etzRbt, "data", true)
+		rbtMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		rbtMgr.Start(ctx)
+		srv.Rbt = func() interface{} { return rbtMgr.Report() }
+		log.Printf("rbt: initialized and running on paper account")
+	} else {
+		log.Printf("rbt: disabled (no PAPER_RBT keys)")
+	}
+
+	// SNDK 1-Minute Micro-Scalper paper desk. STRICT one-account-per-desk: runs only on
+	// its OWN keys (PAPER_SNDK_*) — no fallback to the RBT account. Empty keys = benched.
+	if cfg.PaperSndkKey != "" && cfg.PaperSndkSecret != "" {
+		etzSndk, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzSndk = time.UTC
+		}
+		sndkBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperSndkKey, cfg.PaperSndkSecret)
+		sndkMgr := sndk.New(sndkBroker, engine, etzSndk, "data", true)
+		sndkMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		sndkMgr.Start(ctx)
+		srv.Sndk = func() interface{} { return sndkMgr.Report() }
+		log.Printf("sndk: initialized and running on paper account")
+	} else {
+		log.Printf("sndk: disabled (no PAPER_SNDK keys — strict one account per desk)")
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -753,6 +920,24 @@ func seedSignalEngine(client *alpaca.Client, se *signals.Engine, symbols []strin
 		atr := avgLastF(trs, 14)
 		av := avgLastF(vols, 20)
 		se.SeedDaily(sym, atr, av)
+
+		// Rolling trend for the alignment playbook: yesterday's close vs the SMA of the
+		// prior 20 daily closes. Drop today's (possibly partial) daily bar first so a
+		// mid-session boot doesn't peek at today.
+		et := sessionStartET(time.Now()).Location()
+		todayET := time.Now().In(et).Format("2006-01-02")
+		tcl := closes
+		if last := bars[len(bars)-1]; last.Time.In(et).Format("2006-01-02") == todayET {
+			tcl = closes[:len(closes)-1]
+		}
+		if len(tcl) >= 21 {
+			var ma float64
+			for _, c := range tcl[len(tcl)-21 : len(tcl)-1] {
+				ma += c
+			}
+			ma /= 20
+			se.SeedTrend(sym, tcl[len(tcl)-1] > ma)
+		}
 	}
 
 	today := sessionStartET(time.Now())

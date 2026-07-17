@@ -23,19 +23,22 @@ import (
 //	Manager (market entry → trailing-stop floor → Agent 3 exit loop → EOD flatten)
 //
 // Every decision, including every skip, is written to the quant decision log. The dip
-// pipeline (dipwatch → Telegram → OnDip) is untouched and shares the same allocator, so
-// the two can never oversubscribe the budget. Paper-only by construction: the broker
-// holds paper keys; there is no code path from here to the live account.
+// pipeline (dipwatch → Telegram → OnDip) runs as its own desk with its OWN allocator,
+// broker (paper account), and daily loss cap — the two families can't touch each
+// other's capital. Paper-only by construction: the broker holds paper keys; there is
+// no code path from here to the live account.
 type SignalTrader struct {
-	eng     *Engine         // quant engine (allocator, decision log, candle prices, universe posture)
+	eng     *Engine         // quant engine (decision log, candle prices, universe posture)
+	alloc   *Allocator      // the SIGNAL desk's own capital pot (separate from the dip+rise desk)
 	mgr     *Manager        // position lifecycle (entry, stop floor, Agent 3, flatten)
 	sigs    *signals.Engine // the live signal engine (TOD gate lives here)
 	judge   *SignalJudge    // LLM red-flag reviewer (nil-safe: skipped when disabled)
 	day     *risk.Day       // daily loss-cap tracker (approximate, halt-only)
-	appCtx  context.Context
-	loc     *time.Location
-	enabled bool
-	todGate bool // enforce the TOD gate (false = shadow-only: journaled, never blocks)
+	appCtx    context.Context
+	loc       *time.Location
+	enabled   bool
+	todGate   bool // enforce the TOD gate (false = shadow-only: journaled, never blocks)
+	alignGate bool // enforce the trend-alignment playbook (QUANT_ALIGN_GATE)
 
 	// Demoted, when set, reports whether the eval scoreboard has benched a strategy
 	// (negative rolling expectancy or CUSUM alarm) — benched strategies keep journaling
@@ -48,13 +51,17 @@ type SignalTrader struct {
 	Clf *ClfGate
 }
 
-// NewSignalTrader wires the bridge. limits supplies the daily loss cap; the allocator
-// (inside eng) owns budget/slots/sizing. todGate enforces the time-of-day gate; when
-// false the gate runs shadow-only (the engine still journals every bucket verdict).
-func NewSignalTrader(ctx context.Context, eng *Engine, mgr *Manager, sigs *signals.Engine, judge *SignalJudge, limits risk.Limits, enabled, todGate bool) *SignalTrader {
+// NewSignalTrader wires the bridge. limits supplies the daily loss cap; alloc is the
+// signal desk's own budget/slots/sizing pot. todGate enforces the time-of-day gate;
+// when false the gate runs shadow-only (the engine still journals every verdict).
+func NewSignalTrader(ctx context.Context, eng *Engine, alloc *Allocator, mgr *Manager, sigs *signals.Engine, judge *SignalJudge, limits risk.Limits, enabled, todGate, alignGate bool) *SignalTrader {
+	if alloc == nil {
+		alloc = eng.alloc // legacy single-desk wiring
+	}
 	t := &SignalTrader{
-		eng: eng, mgr: mgr, sigs: sigs, judge: judge,
+		eng: eng, alloc: alloc, mgr: mgr, sigs: sigs, judge: judge,
 		day: risk.NewDay(limits, eng.loc), appCtx: ctx, loc: eng.loc, enabled: enabled, todGate: todGate,
+		alignGate: alignGate,
 	}
 	// Feed the loss-cap tracker with approximate realized P&L from every close.
 	mgr.OnClosed = func(sym string, pnl float64) {
@@ -67,6 +74,10 @@ func NewSignalTrader(ctx context.Context, eng *Engine, mgr *Manager, sigs *signa
 	}
 	return t
 }
+
+// DayRisk exposes the shared daily loss-cap tracker so sibling entry sources (the rise
+// watcher) halt on the same day P&L the signal trader does.
+func (t *SignalTrader) DayRisk() *risk.Day { return t.day }
 
 // OnSignal is the signals.Engine hook. It must not block the market-data path, so the
 // full decision chain runs on its own goroutine.
@@ -85,7 +96,15 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		log.Printf("[signal-trader] skip %s %s — %s", sig.Strategy, sym, reason)
 	}
 
-	// 1) The learned time-of-day gate (decayed buckets). Enforcement is switchable
+	// 1) Trend-alignment playbook (signals.AlignmentAllowed — the 12-month regime x
+	// strategy study): each strategy may only trade its proven (market trend, stock
+	// trend) cells. Deterministic and stamped on the signal at publish; unknown trends
+	// fail open. Switchable via QUANT_ALIGN_GATE.
+	if t.alignGate && sig.AlignOK != nil && !*sig.AlignOK {
+		skip(fmt.Sprintf("alignment: cell %s not in this strategy's playbook", sig.TrendCell))
+		return
+	}
+	// 1a) The learned time-of-day gate (decayed buckets). Enforcement is switchable
 	// (QUANT_TOD_GATE): the 12-month re-test showed its edge is regime-dependent, so the
 	// operator can demote it to shadow without losing the journal evidence.
 	if t.todGate && !t.sigs.EntryAllowed(sig) {
@@ -131,12 +150,12 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		return
 	}
 	// 4) Daily loss cap.
-	if err := t.day.CanEnter(t.eng.alloc.OpenCount(), time.Now()); err != nil {
+	if err := t.day.CanEnter(t.alloc.OpenCount(), time.Now()); err != nil {
 		skip(err.Error())
 		return
 	}
 	// 5) Slot/budget/duplicate check (cheap, before spending an LLM call).
-	if !t.eng.alloc.CanFund(sym) {
+	if !t.alloc.CanFund(sym) {
 		skip("no slot/capital free (or already held)")
 		return
 	}
@@ -160,14 +179,17 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		}
 		conf = dec.Confidence
 	}
-	// Cautious posture (Strategist): demand higher conviction before committing.
-	if t.eng.universe != nil && strings.EqualFold(t.eng.universe.Regime().Posture, "cautious") && conf < 0.65 {
-		skip(fmt.Sprintf("cautious posture requires conviction ≥ 0.65 (got %.2f)", conf))
+	// Cautious posture (Strategist): demand higher conviction before committing. 0.60
+	// (was 0.65): the judge's half-slice band starts at 0.6, and the old bar killed a
+	// judge-approved 0.62 by a rounding-sized margin on 2026-07-09 while the desk sat at
+	// zero trades — cautious sizing (half slice) already prices in the doubt.
+	if t.eng.universe != nil && strings.EqualFold(t.eng.universe.Regime().Posture, "cautious") && conf < 0.60 {
+		skip(fmt.Sprintf("cautious posture requires conviction ≥ 0.60 (got %.2f)", conf))
 		return
 	}
 
 	// 7) Deterministic sizing + funding (conviction picks full vs half slice).
-	size := t.eng.alloc.Size(conf)
+	size := t.alloc.Size(conf)
 	if size <= 0 {
 		skip(fmt.Sprintf("allocator returned no size (conf %.2f)", conf))
 		return
@@ -176,7 +198,7 @@ func (t *SignalTrader) handle(sig signals.Signal) {
 		skip(fmt.Sprintf("$%.0f can't buy 1 share at $%.2f", size, sig.Price))
 		return
 	}
-	if !t.eng.alloc.Fund(sym, size) {
+	if !t.alloc.Fund(sym, size) {
 		skip("slot taken while deciding")
 		return
 	}
@@ -221,6 +243,13 @@ func (t *SignalTrader) judgeSnapshot(sig signals.Signal) string {
 		"features": sig.Features,
 		"posture":  posture,
 	}
+	if sig.TrendCell != "" {
+		snap["trend_cell"] = sig.TrendCell // playbook-verified regime cell (context, not a veto axis)
+	}
+	// NOTE (2026-07-09): Agent 4's news sentiment deliberately does NOT feed this snapshot
+	// yet — the operator wants the signal pipeline tested clean first. Candidate upgrade:
+	// add the cached {lean, score, has_catalyst} here (see engine.go entrySnapshot for the
+	// pattern) so the judge can tell a healthy washout from a fresh-bad-news knife.
 	b, _ := json.Marshal(snap)
 	return string(b)
 }

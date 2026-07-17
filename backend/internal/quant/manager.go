@@ -6,10 +6,57 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+)
+
+// exitGraceMin is the MECHANICAL grace period (minutes): Agent 3 is not consulted at all
+// during a position's first N minutes, so the entry's own deterministic plan (exchange
+// stop, trailing floor, target, max hold, EOD flatten — all of which keep running from
+// second zero) gets a fair chance before the LLM may cut it. Added 2026-07-16 after the
+// exit audit: 7 of 9 rise exits were LLM-cut within 4 minutes (two within 15 seconds)
+// for being pennies below entry — noise read as "structure broken" — on a strategy
+// designed for a 40-minute window. Original behavior: no grace (Agent 3 consulted from
+// the first tick). Env: QUANT_EXIT_GRACE_MIN (0 restores the original behavior).
+var exitGraceMin = func() int {
+	if v := strings.TrimSpace(os.Getenv("QUANT_EXIT_GRACE_MIN")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+		log.Printf("[quant] ignoring invalid QUANT_EXIT_GRACE_MIN=%q (using 10)", v)
+	}
+	return 10
+}()
+
+func envFloatQ(key string, def float64) float64 {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return f
+		}
+		log.Printf("[quant] ignoring invalid %s=%q (using %v)", key, v, def)
+	}
+	return def
+}
+
+// Mechanical exit rails (2026-07-16, THROUGHPUT_MODE.md). All expressed in units of the
+// position's OWN planned risk R (entry − original stop; trailing-stop distance when no
+// fixed stop), so they scale with how the trade was sized. Set any to 0 to disable it.
+var (
+	// D — breakeven ratchet: once price reaches entry + beRatchetR×R, the stop moves to
+	// entry. From then on the worst case is $0: a winner can no longer become a loser.
+	beRatchetR = envFloatQ("QUANT_BREAKEVEN_R", 0.5)
+	// E — grace checkpoints: one look at grace/2 (strict) and one at grace end (normal).
+	// Exit only if the loss exceeds the threshold AND price is below session VWAP —
+	// two independent conditions so a mere wiggle can't trip it.
+	chkHalfR = envFloatQ("QUANT_CHK_HALF_R", 0.75)
+	chkFullR = envFloatQ("QUANT_CHK_FULL_R", 0.5)
+	// Noise floor: after grace, an Agent 3 exit_now on a LOSING position is honored only
+	// when the loss is ≥ exitNoiseR×R. Profit-taking exits always pass. (2026-07-16
+	// audit: the LLM cut positions 0.06% red — pennies — as "structure broken".)
+	exitNoiseR = envFloatQ("QUANT_EXIT_NOISE_R", 0.25)
 )
 
 // managedPos is one live position the manager is actively running Agent 3 on.
@@ -21,20 +68,38 @@ type managedPos struct {
 	stopOrderID string
 	stopPrice   float64 // current FIXED stop level (0 while on the initial trailing stop)
 	conf        float64
-	source      string  // which pipeline opened it: "dip" | "signal" | "rehydrated"
+	source      string  // which pipeline opened it: "dip" | "signal" | "rise" | "rehydrated"
 	strategy    string  // detector that opened it (signal pipeline) or "dip"
 	target      float64 // original take-profit the entry set (0 = none, e.g. dip trades)
 	origStop    float64 // original stop the entry set (0 = none)
+	trailPct    float64 // per-entry trailing-stop % (0 = manager default)
+	maxHoldMin  int     // deterministic time exit in minutes (0 = none)
+
+	beDone  bool // breakeven ratchet already applied (or stop already ≥ entry)
+	chkHalf bool // mid-grace checkpoint (grace/2) already evaluated
+	chkFull bool // grace-end checkpoint already evaluated
 }
 
 // EntryContext carries what a position was opened WITH, so the exit agent can manage it
 // knowing the plan (strategy personality + original target) instead of blind. Target/Stop
 // are 0 when the pipeline set none (dip trades ride a trailing stop, no fixed target).
+// TrailPct/MaxHoldMin let a pipeline run tighter, time-boxed exits (the rise watcher's
+// short bounces); 0 keeps the manager defaults, so existing pipelines are unaffected.
 type EntryContext struct {
-	Source   string
-	Strategy string
-	Target   float64
-	Stop     float64
+	Source     string
+	Strategy   string
+	Target     float64
+	Stop       float64
+	TrailPct   float64
+	MaxHoldMin int
+}
+
+// trailFor is the trailing-stop percent for one position (its own, else the desk default).
+func (m *Manager) trailFor(pos *managedPos) float64 {
+	if pos != nil && pos.trailPct > 0 {
+		return pos.trailPct
+	}
+	return m.trailPct
 }
 
 // Manager owns the live position lifecycle: it places the entry, the deterministic trailing-stop
@@ -43,6 +108,7 @@ type EntryContext struct {
 // closes. The floor guarantees no position is ever left unmanaged.
 type Manager struct {
 	eng          *Engine
+	alloc        *Allocator // THIS desk's capital pot (dip+rise and signal desks each have their own)
 	broker       *Broker
 	agent3       *Agent3
 	trailPct     float64
@@ -53,18 +119,48 @@ type Manager struct {
 	// tracker; the authoritative P&L remains the broker reconstruction.
 	OnClosed func(sym string, approxPNL float64)
 
+	// ensureLive, when set, subscribes a symbol's trades/quotes on the SIP stream so the
+	// UI's open-position P&L ticks sub-second. Signal-universe symbols otherwise ride the
+	// bar channel only (1-min updates) — this is why quant positions looked frozen on the
+	// page while the backend was fine. Nil-safe; display-path only.
+	ensureLive func(string)
+
 	mu        sync.Mutex
 	open      map[string]*managedPos
 	keeperDay string // ET day the overnight keeper was chosen for
 	keeperSym string // the single position allowed to hold overnight ("" = none)
 }
 
-func NewManager(eng *Engine, broker *Broker, agent3 *Agent3, trailPct, overnightCap float64) *Manager {
+// NewManager builds a position manager bound to ONE desk: its allocator (capital pot)
+// and its broker (paper account). Two desks must never share either.
+func NewManager(eng *Engine, alloc *Allocator, broker *Broker, agent3 *Agent3, trailPct, overnightCap float64) *Manager {
 	if trailPct <= 0 {
 		trailPct = 1.5
 	}
-	return &Manager{eng: eng, broker: broker, agent3: agent3, trailPct: trailPct,
+	if alloc == nil && eng != nil {
+		alloc = eng.alloc // legacy single-desk wiring
+	}
+	return &Manager{eng: eng, alloc: alloc, broker: broker, agent3: agent3, trailPct: trailPct,
 		overnightCap: overnightCap, open: map[string]*managedPos{}}
+}
+
+// SetEnsureLive wires the on-demand streaming activation (sub-second position P&L in
+// the UI) and applies it to any ALREADY-open positions — rehydration runs before the
+// HTTP server (and this hook) exists, so survivors would otherwise miss streaming.
+func (m *Manager) SetEnsureLive(fn func(string)) {
+	m.ensureLive = fn
+	if fn == nil {
+		return
+	}
+	for _, s := range m.OpenSymbols() {
+		fn(s)
+	}
+}
+
+func (m *Manager) markLive(sym string) {
+	if m.ensureLive != nil {
+		m.ensureLive(sym)
+	}
 }
 
 // OpenSymbols lists symbols currently being managed.
@@ -93,7 +189,7 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 	registered := false
 	defer func() {
 		if !registered {
-			m.eng.alloc.Release(sym) // never opened → give the capital back
+			m.alloc.Release(sym) // never opened → give the capital back
 		}
 	}()
 
@@ -127,8 +223,12 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 
 	// Deterministic protective floor: a trailing stop that follows price up. If it can't be
 	// placed, immediately exit so we never hold an unprotected position.
+	trail := m.trailPct
+	if ec.TrailPct > 0 {
+		trail = ec.TrailPct
+	}
 	stopCoid := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, sym, time.Now().UnixNano())
-	stopID, serr := m.broker.TrailingStopSell(sym, fq, m.trailPct, stopCoid)
+	stopID, serr := m.broker.TrailingStopSell(sym, fq, trail, stopCoid)
 	if serr != nil {
 		log.Printf("[quant] %s trailing-stop failed (%v) — exiting to stay protected", sym, serr)
 		exitCoid := fmt.Sprintf("%s__%s__exit__No_Stop__%d", QuantStrategy, sym, time.Now().UnixNano())
@@ -141,15 +241,17 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 	// Initialize the tracked stop level to the trailing floor's starting point so Agent 3's first
 	// tighten can't accidentally LOOSEN protection (and the exit snapshot shows a real stop).
 	pos := &managedPos{symbol: sym, qty: fq, entryPrice: ap, entryTime: time.Now(), stopOrderID: stopID,
-		stopPrice: round2(ap * (1 - m.trailPct/100)), conf: conf,
-		source: ec.Source, strategy: ec.Strategy, target: ec.Target, origStop: ec.Stop}
+		stopPrice: round2(ap * (1 - trail/100)), conf: conf,
+		source: ec.Source, strategy: ec.Strategy, target: ec.Target, origStop: ec.Stop,
+		trailPct: ec.TrailPct, maxHoldMin: ec.MaxHoldMin}
 	m.mu.Lock()
 	m.open[sym] = pos
 	m.mu.Unlock()
 	registered = true
+	m.markLive(sym)
 	m.eng.logRec(LogRecord{Agent: "agent3_exit", Event: "order", Symbol: sym,
-		Note: fmt.Sprintf("entry %.0f @ $%.2f; trailing stop %.1f%% placed", fq, ap, m.trailPct)})
-	log.Printf("[quant] ENTER %s %.0f @ $%.2f (conf %.2f); trailing stop %.1f%%", sym, fq, ap, conf, m.trailPct)
+		Note: fmt.Sprintf("entry %.0f @ $%.2f; trailing stop %.1f%% placed", fq, ap, trail)})
+	log.Printf("[quant] ENTER %s %.0f @ $%.2f (conf %.2f); trailing stop %.1f%%", sym, fq, ap, conf, trail)
 	m.manage(ctx, pos)
 }
 
@@ -157,6 +259,22 @@ func (m *Manager) OpenPosition(ctx context.Context, sym string, conf, dollars fl
 var openOrderStatuses = map[string]bool{
 	"new": true, "accepted": true, "held": true, "partially_filled": true,
 	"pending_new": true, "accepted_for_bidding": true, "calculated": true,
+}
+
+// foreignDeskPrefixes are the client-order-id prefixes of the OTHER paper desks. A
+// position whose most recent filled entry buy carries one of these was opened by a
+// sibling desk sharing this account — it is NOT ours to adopt, re-stop, or flatten.
+// (2026-07-13/14 incident: Rehydrate adopted RIDP's reverter positions, canceled their
+// exchange stops as "wrong-size", and Agent 3 sold them minutes later.)
+var foreignDeskPrefixes = []string{"ridp_", "rbt_", "sndk_"}
+
+func foreignDeskOrder(coid string) bool {
+	for _, p := range foreignDeskPrefixes {
+		if strings.HasPrefix(coid, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // Rehydrate re-adopts positions that survived a process restart. The exchange is the
@@ -192,6 +310,25 @@ func (m *Manager) Rehydrate(ctx context.Context) int {
 		_, exists := m.open[p.Symbol]
 		m.mu.Unlock()
 		if exists {
+			continue
+		}
+
+		// Ownership guard: if the newest filled BUY of this symbol was placed by a sibling
+		// desk (shared account), the position is theirs — leave it (and its stop) alone.
+		// Positions with no order history at all are still adopted: on a dedicated account
+		// they can only be ours (or the operator's, who wants them protected).
+		var newestBuy *paperOrd
+		for i := range orders {
+			o := &orders[i]
+			if o.Symbol != p.Symbol || o.Side != "buy" || o.Status != "filled" {
+				continue
+			}
+			if newestBuy == nil || ordTime(*o).After(ordTime(*newestBuy)) {
+				newestBuy = o
+			}
+		}
+		if newestBuy != nil && foreignDeskOrder(newestBuy.ClientOrderID) {
+			log.Printf("[quant] rehydrate: %s belongs to a sibling desk (%s) — not adopting", p.Symbol, newestBuy.ClientOrderID)
 			continue
 		}
 
@@ -247,7 +384,8 @@ func (m *Manager) Rehydrate(ctx context.Context) int {
 		m.mu.Lock()
 		m.open[p.Symbol] = pos
 		m.mu.Unlock()
-		if !m.eng.alloc.Fund(p.Symbol, p.Qty*p.AvgEntry) {
+		m.markLive(p.Symbol)
+		if !m.alloc.Fund(p.Symbol, p.Qty*p.AvgEntry) {
 			log.Printf("[quant] rehydrate: WARNING — allocator would not fund %s ($%.0f); budget accounting may under-count", p.Symbol, p.Qty*p.AvgEntry)
 		}
 		m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: p.Symbol,
@@ -309,8 +447,36 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 			continue
 		}
 
+		// Deterministic time exit (rise-watch bounces): past the max hold, the move this
+		// trade was built for is over — flatten regardless of what Agent 3 would say.
+		if pos.maxHoldMin > 0 && time.Since(pos.entryTime) >= time.Duration(pos.maxHoldMin)*time.Minute {
+			if m.forceExit(pos, "Time_Exit") {
+				m.close(pos, fmt.Sprintf("max hold %dm reached", pos.maxHoldMin))
+				return
+			}
+			continue
+		}
+
+		// D — breakeven ratchet (mechanical, runs for the position's whole life).
+		m.breakevenRatchet(pos)
+
+		// E — grace checkpoints (mechanical): one strict look at grace/2, one normal look
+		// at grace end. Exits only a position that is BOTH meaningfully red (in units of
+		// its own planned risk) AND below session VWAP.
+		if m.graceCheckpoints(pos) {
+			return
+		}
+
 		// No Agent 3? The trailing stop manages it on its own.
 		if m.agent3 == nil || !m.agent3.Enabled() {
+			continue
+		}
+
+		// Mechanical grace period: within the first exitGraceMin minutes the LLM is not
+		// consulted — the deterministic protections above (exchange stop, max hold, EOD,
+		// ratchet, checkpoints) are the only exits. A short wiggle below entry is noise,
+		// not a broken thesis.
+		if exitGraceMin > 0 && time.Since(pos.entryTime) < time.Duration(exitGraceMin)*time.Minute {
 			continue
 		}
 
@@ -328,6 +494,120 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 			return // position closed by a take-profit / exit_now
 		}
 	}
+}
+
+// riskDist returns the position's planned risk per share: entry − original stop when the
+// entry set one (rise = the dip low, signal = the bracket stop), else the trailing-stop
+// distance (dip trades). This is the "R" every mechanical exit rail is measured in.
+func (m *Manager) riskDist(pos *managedPos) float64 {
+	if pos.origStop > 0 && pos.origStop < pos.entryPrice {
+		return pos.entryPrice - pos.origStop
+	}
+	return pos.entryPrice * m.trailFor(pos) / 100
+}
+
+// breakevenRatchet (rail D): once price has reached entry + beRatchetR×R, replace the
+// protective stop with a fixed stop AT entry. Ratchet-up only, once per position; uses
+// the same confirm-cancel-then-place path as Agent 3's tighten_stop so there can never
+// be two stops (oversell) or zero stops (unprotected).
+func (m *Manager) breakevenRatchet(pos *managedPos) {
+	if beRatchetR <= 0 || pos.beDone {
+		return
+	}
+	if pos.stopPrice >= pos.entryPrice {
+		pos.beDone = true // already at/above breakeven (e.g. Agent 3 tightened past it)
+		return
+	}
+	cur := m.eng.LastClose(pos.symbol)
+	r := m.riskDist(pos)
+	if cur <= 0 || r <= 0 || cur < pos.entryPrice+beRatchetR*r {
+		return
+	}
+	// On a TRAILING stop (stopPrice 0): if the trail's floor has already ratcheted to or
+	// past breakeven (conservative bound: current price × (1 − trail%)), replacing it
+	// with a fixed stop AT entry would LOOSEN protection and freeze the upward ratchet —
+	// keep the trail instead. (Real scenario: price gaps +2% between ticks; trail floor
+	// is now entry+0.5% while a breakeven stop would sit below it at entry.)
+	if pos.stopPrice == 0 && cur*(1-m.trailFor(pos)/100) >= pos.entryPrice {
+		pos.beDone = true
+		return
+	}
+	be := pos.entryPrice
+	if be >= cur {
+		return // market slipped back under entry between checks — retry next pass
+	}
+	if !m.cancelAndConfirm(pos.stopOrderID) {
+		return // old stop filled/unconfirmed — next pass reconciles (flat → close path)
+	}
+	coid := fmt.Sprintf("%s__%s__exit__BE_Stop__%d", QuantStrategy, pos.symbol, time.Now().UnixNano())
+	id, err := m.broker.StopSell(pos.symbol, pos.qty, be, coid)
+	if err != nil {
+		// Never left unprotected: fall back to a fresh trailing stop — and STOP trying.
+		// The trail is full pre-ratchet protection; retrying every tick would cancel a
+		// good stop and re-place it in a loop (a per-position API storm, the 2026-07-16
+		// failure shape) for a nice-to-have upgrade. One attempt, then stand down.
+		tc := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, pos.symbol, time.Now().UnixNano())
+		if pid, perr := m.broker.TrailingStopSell(pos.symbol, pos.qty, m.trailFor(pos), tc); perr == nil {
+			pos.stopOrderID = pid
+			pos.stopPrice = 0
+			pos.beDone = true
+			m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+				Note: "breakeven ratchet: stop placement failed — kept trailing stop, not retrying"})
+		}
+		return
+	}
+	pos.stopOrderID = id
+	pos.stopPrice = be
+	pos.beDone = true
+	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+		Note: fmt.Sprintf("breakeven ratchet: +%.2fR reached — stop moved to entry $%.2f (worst case now $0)", beRatchetR, be)})
+}
+
+// graceCheckpoints (rail E): two one-shot mechanical inspections — at grace/2 with the
+// strict threshold (chkHalfR×R) and at grace end with the normal one (chkFullR×R). A
+// position must be BOTH that far underwater AND below session VWAP to be cut; either
+// condition alone is survivable noise. Returns true when the position was closed.
+func (m *Manager) graceCheckpoints(pos *managedPos) bool {
+	if exitGraceMin <= 0 {
+		return false
+	}
+	held := time.Since(pos.entryTime)
+	full := time.Duration(exitGraceMin) * time.Minute
+	half := full / 2
+	check := func(fracR float64, label string) bool {
+		if fracR <= 0 {
+			return false
+		}
+		cur := m.eng.LastClose(pos.symbol)
+		r := m.riskDist(pos)
+		if cur <= 0 || r <= 0 {
+			return false
+		}
+		loss := pos.entryPrice - cur
+		if loss < fracR*r {
+			return false
+		}
+		_, _, vwap := m.eng.sessionAgg(pos.symbol)
+		if vwap <= 0 || cur >= vwap {
+			return false
+		}
+		if !m.forceExit(pos, "Checkpoint_Exit") {
+			return false // stop unconfirmed — deterministic protections still standing; retry next pass
+		}
+		m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+			Note: fmt.Sprintf("%s checkpoint: down %.2fR and below VWAP — mechanical exit", label, loss/r)})
+		m.close(pos, label+" checkpoint exit")
+		return true
+	}
+	if !pos.chkHalf && held >= half && held < full {
+		pos.chkHalf = true
+		return check(chkHalfR, "mid-grace")
+	}
+	if !pos.chkFull && held >= full {
+		pos.chkFull = true
+		return check(chkFullR, "grace-end")
+	}
+	return false
 }
 
 // cadence is adaptive: faster when price is near the stop (the moment that matters), slower when calm.
@@ -363,7 +643,7 @@ func (m *Manager) execute(pos *managedPos, d ExitDecision) (closed bool) {
 		if err != nil {
 			// Re-place a trailing stop so we're never left unprotected.
 			tc := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, sym, time.Now().UnixNano())
-			if pid, perr := m.broker.TrailingStopSell(sym, pos.qty, m.trailPct, tc); perr == nil {
+			if pid, perr := m.broker.TrailingStopSell(sym, pos.qty, m.trailFor(pos), tc); perr == nil {
 				pos.stopOrderID = pid
 				pos.stopPrice = 0
 			}
@@ -381,6 +661,18 @@ func (m *Manager) execute(pos *managedPos, d ExitDecision) (closed bool) {
 		}
 		return false
 	case ExitNow:
+		// Noise floor: an exit_now on a LOSING position must be backed by a real move —
+		// at least exitNoiseR of the trade's own planned risk. Profit-side exits always
+		// pass. (2026-07-16 audit: 7 of 9 LLM exits fired at ≤0.15% red — tick noise
+		// narrated as "structure broken".)
+		if exitNoiseR > 0 && cur > 0 && cur < pos.entryPrice {
+			if r := m.riskDist(pos); r > 0 && pos.entryPrice-cur < exitNoiseR*r {
+				m.eng.logRec(LogRecord{Agent: "agent3_exit", Event: "skip", Symbol: sym,
+					Note: fmt.Sprintf("exit_now vetoed by noise floor: down %.2fR < %.2fR — deterministic plan continues (%s)",
+						(pos.entryPrice-cur)/r, exitNoiseR, d.Reason)})
+				return false
+			}
+		}
 		if m.forceExit(pos, "AI_Exit") {
 			m.close(pos, "AI exit")
 			return true
@@ -438,7 +730,7 @@ func (m *Manager) forceExit(pos *managedPos, reason string) bool {
 	if _, serr := m.broker.MarketSell(pos.symbol, qty, coid); serr != nil {
 		log.Printf("[quant] %s force exit (%s) sell failed: %v — re-placing protective stop", pos.symbol, reason, serr)
 		tc := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, pos.symbol, time.Now().UnixNano())
-		if pid, perr := m.broker.TrailingStopSell(pos.symbol, qty, m.trailPct, tc); perr == nil {
+		if pid, perr := m.broker.TrailingStopSell(pos.symbol, qty, m.trailFor(pos), tc); perr == nil {
 			pos.stopOrderID = pid
 			pos.stopPrice = 0
 		}
@@ -489,7 +781,7 @@ func (m *Manager) close(pos *managedPos, note string) {
 	m.mu.Lock()
 	delete(m.open, sym)
 	m.mu.Unlock()
-	m.eng.alloc.Release(sym)
+	m.alloc.Release(sym)
 	pnl := 0.0
 	if px := m.eng.LastClose(sym); px > 0 {
 		pnl = (px - pos.entryPrice) * pos.qty

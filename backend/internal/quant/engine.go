@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"live-optimus/backend/internal/candles"
+	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
 )
 
@@ -46,10 +47,19 @@ type Engine struct {
 	agent4   *Agent4
 	broker   *Broker
 	manager  *Manager
+	rise     *RiseWatch // optional: arms declined dips for rise confirmation
 	loc      *time.Location
 	ctx      context.Context
 	dataDir  string
 	live     bool
+	dayRisk  *risk.Day // dip+rise desk's daily loss cap (nil = no cap on dip entries)
+
+	// The SIGNAL desk's stack, referenced for reporting only (the signal trader owns the
+	// trading path). The engine's own broker/alloc/manager above belong to the DIP+RISE
+	// desk — the two families run on separate paper accounts with separate budgets.
+	sigBroker *Broker
+	sigAlloc  *Allocator
+	sigLive   bool
 
 	// Funding coordinator: co-arriving approved buys (dips confirmed in the same burst, each on
 	// its own goroutine) are gathered for a short window, then funded HIGHEST dip-quality first
@@ -81,15 +91,33 @@ func (e *Engine) SetDataDir(d string) { e.dataDir = d }
 // SetAgent4 wires the sentiment agent (optional; its cached score enriches Agent 2's snapshot).
 func (e *Engine) SetAgent4(a *Agent4) { e.agent4 = a }
 
+// SetRiseWatch wires the rising watcher: dips Agent 2 declines get armed for a short
+// window and entered only if the rise CONFIRMS (a validated, deterministic second chance).
+func (e *Engine) SetRiseWatch(r *RiseWatch) { e.rise = r }
+
 // SetContext provides the app context used for per-position management goroutines.
 func (e *Engine) SetContext(ctx context.Context) { e.ctx = ctx }
 
-// SetExecution wires the paper broker + exit manager. Once set AND SetLive(true), approved buys
-// place real paper orders (with the deterministic stop floor) and Agent 3 manages the exit.
+// SetExecution wires the DIP+RISE desk's paper broker + exit manager. Once set AND
+// SetLive(true), approved dip buys place real paper orders (with the deterministic stop
+// floor) and Agent 3 manages the exit.
 func (e *Engine) SetExecution(b *Broker, m *Manager) {
 	e.broker = b
 	e.manager = m
 }
+
+// SetSignalExecution registers the SIGNAL desk's broker + allocator for reporting (the
+// signal trader owns that desk's trading path directly).
+func (e *Engine) SetSignalExecution(b *Broker, a *Allocator, live bool) {
+	e.sigBroker = b
+	e.sigAlloc = a
+	e.sigLive = live
+}
+
+// SetDayRisk wires the dip+rise desk's daily loss-cap tracker: once the desk has lost
+// its cap for the day, approved dip buys are skipped until tomorrow (protection only —
+// it never places or changes orders).
+func (e *Engine) SetDayRisk(d *risk.Day) { e.dayRisk = d }
 
 // SentimentScore returns Agent 4's cached score for a symbol (0 if none) — for allocator ranking.
 func (e *Engine) sentimentScore(sym string) float64 {
@@ -149,6 +177,11 @@ func (e *Engine) OnDip(in DipInput) string {
 	log.Printf("[quant] agent2 %s -> %s (%.2f): %s", sym, dec.Action, dec.Confidence, dec.Reason)
 
 	if !dec.IsBuy() {
+		// Second chance: the replay showed most declined dips are correctly declined AT
+		// DETECTION, but many still bounce — arm the rise watcher to catch the confirmed ones.
+		if e.rise != nil && e.rise.Arm(de, dec.Confidence) {
+			return fmt.Sprintf("🤖 Agent 2: NO-BUY — %s\n⏱ rise-watch armed (%dm): will buy only a confirmed rise", dec.Reason, riseWatchWindowMin)
+		}
 		return fmt.Sprintf("🤖 Agent 2: NO-BUY — %s", dec.Reason)
 	}
 
@@ -161,6 +194,16 @@ func (e *Engine) OnDip(in DipInput) string {
 		e.logRec(LogRecord{Agent: "allocator", Event: "skip", Symbol: sym,
 			Note: fmt.Sprintf("SHADOW: would fund $%.0f (live trading off)", size)})
 		return fmt.Sprintf("🤖 Agent 2: BUY (%.2f) → would fund $%.0f [shadow] — %s", dec.Confidence, size, dec.Reason)
+	}
+
+	// Daily loss cap (the desk's "bad day? stop digging" brake): once today's realized
+	// P&L hits −cap, approved buys are skipped until tomorrow. Same protection the
+	// signal desk has; open positions keep being managed normally.
+	if e.dayRisk != nil {
+		if err := e.dayRisk.CanEnter(e.alloc.OpenCount(), time.Now()); err != nil {
+			e.logRec(LogRecord{Agent: "allocator", Event: "skip", Symbol: sym, Note: err.Error()})
+			return fmt.Sprintf("🤖 Agent 2: BUY (%.2f) — skipped: %s", dec.Confidence, err.Error())
+		}
 	}
 
 	// LIVE: hand the approved buy to the funding coordinator, which gathers co-arriving approved
@@ -285,6 +328,10 @@ func (e *Engine) exitSnapshot(sym string, pos *managedPos, entryPrice, qty, curS
 		"rvol":               round2(rvol),
 		"market":             e.marketContext(),
 		"bars_1m":            e.recentBars(sym, 10),
+		// Two granularities on purpose: 10x1-min for fine recent detail, 4x5-min for the
+		// last ~20 minutes of structure (trend, higher lows) — wider context at almost no
+		// extra token cost vs doubling the 1-min window.
+		"bars_5m": e.recentBarsTF(sym, 5, 4),
 	}
 	// Entry PLAN — so Agent 3 manages with knowledge of intent, not blind.
 	if pos != nil {
@@ -308,7 +355,12 @@ func (e *Engine) exitSnapshot(sym string, pos *managedPos, entryPrice, qty, curS
 }
 
 func (e *Engine) recentBars(sym string, n int) []map[string]interface{} {
-	bars := e.candles.Snapshot(sym, 1)
+	return e.recentBarsTF(sym, 1, n)
+}
+
+// recentBarsTF returns the last n bars of the given timeframe (minutes) for the snapshot.
+func (e *Engine) recentBarsTF(sym string, tf, n int) []map[string]interface{} {
+	bars := e.candles.Snapshot(sym, tf)
 	if n > 0 && len(bars) > n {
 		bars = bars[len(bars)-n:]
 	}

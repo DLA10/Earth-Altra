@@ -38,7 +38,7 @@ func TestRehydrateAdoptsSurvivingPosition(t *testing.T) {
 	alloc := NewAllocator()
 	eng := NewEngine(nil, alloc, nil, nil, candles.NewEngine([]string{"PLTR"}, 10), nil, time.UTC)
 	broker := NewBroker(srv.URL, "k", "s")
-	mgr := NewManager(eng, broker, nil, 1.5, 0)
+	mgr := NewManager(eng, alloc, broker, nil, 1.5, 0)
 	eng.SetExecution(broker, mgr)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,6 +66,53 @@ func TestRehydrateAdoptsSurvivingPosition(t *testing.T) {
 	}
 }
 
+// TestRehydrateSkipsSiblingDeskPositions: a position whose newest filled buy carries a
+// sibling desk's coid prefix (ridp_/rbt_/sndk_ — shared paper account) must NOT be
+// adopted: no stop cancel, no fresh stop, no allocator funding. This is the 2026-07-13/14
+// incident guard (Rehydrate adopted RIDP's reverter positions and Agent 3 sold them).
+func TestRehydrateSkipsSiblingDeskPositions(t *testing.T) {
+	var ordersPlaced, cancels int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/positions":
+			w.Write([]byte(`[{"symbol":"ANET","qty":"8","avg_entry_price":"184.38"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/orders":
+			w.Write([]byte(`[
+			 {"id":"r1","client_order_id":"ridp_reverter__ANET__entry__1","symbol":"ANET","side":"buy","type":"market","qty":"8","filled_qty":"8","filled_avg_price":"184.38","status":"filled","filled_at":"2026-07-13T13:45:00Z","submitted_at":"2026-07-13T13:44:59Z"},
+			 {"id":"r2","client_order_id":"ridp_reverter__ANET__stop__2","symbol":"ANET","side":"sell","type":"stop","qty":"8","stop_price":"180.00","filled_qty":"0","filled_avg_price":"","status":"new","submitted_at":"2026-07-13T13:45:01Z"}
+			]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/orders":
+			ordersPlaced++
+			w.Write([]byte(`{"id":"should-not-happen"}`))
+		case r.Method == http.MethodDelete:
+			cancels++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	alloc := NewAllocator()
+	eng := NewEngine(nil, alloc, nil, nil, candles.NewEngine([]string{"ANET"}, 10), nil, time.UTC)
+	broker := NewBroker(srv.URL, "k", "s")
+	mgr := NewManager(eng, alloc, broker, nil, 1.5, 0)
+	eng.SetExecution(broker, mgr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if n := mgr.Rehydrate(ctx); n != 0 {
+		t.Fatalf("sibling desk's position must not be adopted, got %d", n)
+	}
+	if alloc.Held("ANET") {
+		t.Fatal("allocator must not be funded with a sibling desk's position")
+	}
+	if ordersPlaced != 0 || cancels != 0 {
+		t.Fatalf("sibling desk's protective stop must be left alone (placed %d, canceled %d)", ordersPlaced, cancels)
+	}
+}
+
 // TestRehydratePlacesStopWhenMissing: a surviving position with NO working stop must get
 // a fresh trailing stop immediately (the never-unprotected invariant).
 func TestRehydratePlacesStopWhenMissing(t *testing.T) {
@@ -88,7 +135,7 @@ func TestRehydratePlacesStopWhenMissing(t *testing.T) {
 	alloc := NewAllocator()
 	eng := NewEngine(nil, alloc, nil, nil, candles.NewEngine([]string{"AMD"}, 10), nil, time.UTC)
 	broker := NewBroker(srv.URL, "k", "s")
-	mgr := NewManager(eng, broker, nil, 1.5, 0)
+	mgr := NewManager(eng, alloc, broker, nil, 1.5, 0)
 	eng.SetExecution(broker, mgr)
 
 	ctx, cancel := context.WithCancel(context.Background())

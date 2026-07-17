@@ -25,6 +25,7 @@ const (
 	cusumSlack        = 0.05
 	cusumThreshold    = 3.0
 	cusumDecayN       = 30 // an alarm stops demoting after this many subsequent outcomes
+	probationN        = 5  // net-positive last-N outcomes lift a demotion immediately
 )
 
 // StrategyRow is one strategy's scoreboard line.
@@ -76,6 +77,12 @@ type outcomeRec struct {
 	Strategy string  `json:"strategy"`
 	R        float64 `json:"r_multiple"`
 	ExitTime int64   `json:"exit_time"`
+	// AlignOK is the trend-alignment playbook verdict stamped by the signal engine.
+	// nil = pre-playbook record (counted). false = a cell the strategy may not trade —
+	// EXCLUDED from expectancy/CUSUM, so a strategy is judged only on the trades its
+	// playbook actually allows (else out-of-playbook counterfactual losses would keep
+	// benching it in cells it never trades).
+	AlignOK *bool `json:"align_ok"`
 }
 
 type signalRec struct {
@@ -143,13 +150,18 @@ func Compute(dataDir string, windowDays int, loc *time.Location) (*Scoreboard, e
 			case strings.Contains(line, `"type":"outcome"`):
 				var r outcomeRec
 				if json.Unmarshal([]byte(line), &r) == nil && r.Strategy != "" {
+					if r.ID != "" {
+						outcomeByID[r.ID] = r.R // judge join uses ALL outcomes
+					}
+					// Out-of-playbook cells don't count against (or for) a strategy:
+					// it is judged only on the trades the alignment gate would allow.
+					if r.AlignOK != nil && !*r.AlignOK {
+						continue
+					}
 					a := get(r.Strategy)
 					a.outcomes++
 					a.sumR += r.R
 					a.rs = append(a.rs, r.R)
-					if r.ID != "" {
-						outcomeByID[r.ID] = r.R
-					}
 				}
 			}
 		}
@@ -272,6 +284,20 @@ func Compute(dataDir string, windowDays int, loc *time.Location) (*Scoreboard, e
 			row.Demoted, row.Reason = true, "negative rolling expectancy"
 		case row.CusumAlarm:
 			row.Demoted, row.Reason = true, "CUSUM changepoint alarm"
+		}
+		// Probation reinstatement: a benched strategy whose LAST probationN counterfactual
+		// outcomes are net positive has earned its seat back NOW. Without this, a regime
+		// turn takes days to forgive (2026-07-09: a benched dip_bounce went 4-for-4 on the
+		// first bounce day while the desk sat idle) — the bench must react as fast as the
+		// tape does. The full window still demotes again if the recovery fades.
+		if row.Demoted && len(a.rs) >= probationN {
+			var tail float64
+			for _, r := range a.rs[len(a.rs)-probationN:] {
+				tail += r
+			}
+			if tail > 0 {
+				row.Demoted, row.Reason = false, ""
+			}
 		}
 		if row.Demoted {
 			sb.DemotedSet = append(sb.DemotedSet, s)

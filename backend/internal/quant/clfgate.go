@@ -117,6 +117,10 @@ func (g *ClfGate) Reload() {
 	if margin <= 0 || margin > 1 {
 		margin = 0.03
 	}
+	// Throughput mode 2026-07-16: default margin 0.0 — accept ANY positive-expectancy
+	// entry (EV < 0 is still rejected). Original: the trainer's pre-registered 0.03.
+	// Roll back with QUANT_CLF_MARGIN=0.03 (or unset THROUGHPUT + see THROUGHPUT_MODE.md).
+	margin = envMarginOverride(margin)
 
 	models := map[string]*leaves.Ensemble{}
 	keys := map[string][]string{}
@@ -151,6 +155,20 @@ func (g *ClfGate) Reload() {
 	g.models, g.keys, g.margin, g.lastDay, g.loaded = models, keys, margin, meta.LastDay, true
 	g.mu.Unlock()
 	log.Printf("[clf-gate] loaded %d strategy models (trained through %s, margin %.2f) — parity verified", len(models), meta.LastDay, margin)
+}
+
+// envMarginOverride resolves the effective accept margin: QUANT_CLF_MARGIN env when set
+// (0 is valid — "any positive EV"), else the throughput-mode default 0.0. The trainer's
+// meta margin is kept only as documentation of the pre-registered value.
+func envMarginOverride(metaMargin float64) float64 {
+	if v := os.Getenv("QUANT_CLF_MARGIN"); v != "" {
+		var f float64
+		if _, err := fmt.Sscanf(v, "%g", &f); err == nil && f >= 0 && f <= 1 {
+			return f
+		}
+		log.Printf("[clf-gate] ignoring invalid QUANT_CLF_MARGIN=%q (meta margin %.2f, throughput default 0.0)", v, metaMargin)
+	}
+	return 0.0
 }
 
 func (g *ClfGate) disable(reason string) {

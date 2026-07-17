@@ -58,6 +58,22 @@ type Config struct {
 	// above). The AI quant pipeline places its orders here. Empty key = shadow mode.
 	PaperClaudeKey    string
 	PaperClaudeSecret string
+	PaperRbtKey       string
+	PaperRbtSecret    string
+	// Per-desk paper accounts. STRICT one account per desk: sharing an account lets the
+	// desks liquidate each other's shares and corrupts position tracking (the
+	// 2026-07-13/14 incident: quant's Rehydrate adopted RIDP's positions and Agent 3
+	// sold them). Empty keys = that desk stays OFF — there is no fallback to another
+	// desk's account.
+	PaperRidpKey    string
+	PaperRidpSecret string
+	PaperSndkKey    string
+	PaperSndkSecret string
+	// Dip+rise desk (Agent 2 dip entries + the rise watcher — one strategy family, both
+	// fed by the Telegram dip watcher). Runs on its OWN paper account, separate from the
+	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
+	PaperDipKey    string
+	PaperDipSecret string
 
 	// Anthropic key for the quant agents (entry/exit/review). Empty = agents stay idle.
 	AnthropicAPIKey string
@@ -104,6 +120,18 @@ type Config struct {
 	// tod_bucket/tod_blocked per signal and keeps decayed stats fresh for a future
 	// re-review; flipping this to true re-enforces without a code change.
 	QuantTODGate bool
+	// QuantAlignGate enforces the trend-alignment playbook (signals/alignment.go): each
+	// strategy trades only its proven (market trend, stock trend) cells from the
+	// 12-month regime study. Deterministic; unknown trends fail open. Default true.
+	QuantAlignGate bool
+	// RidpLive routes the RIDP two-strategy desk's orders (RIDER + DIPPER, both fully
+	// deterministic) to the paper-claude account. false = shadow (journals only).
+	RidpLive bool
+	// QuantRiseLive routes rising-watcher entries to the paper broker: dips Agent 2
+	// declined that then print a CONFIRMED rise (validated on the 2026-07-06..08 replay:
+	// +0.37R mean vs a negative edge buying at detection). Default FALSE = shadow: the
+	// watcher arms, journals, and alerts every trigger but places no orders.
+	QuantRiseLive bool
 	// QuantStrategistModel is the pre-market Strategist agent's model ("" uses default).
 	QuantStrategistModel string
 	// QuantStrategist enables the pre-market posture/allocation agent.
@@ -144,6 +172,14 @@ func Load() (*Config, error) {
 
 		PaperClaudeKey:    strings.TrimSpace(os.Getenv("PAPER_CLAUDE_KEY")),
 		PaperClaudeSecret: strings.TrimSpace(os.Getenv("PAPER_CLAUDE_SECRET")),
+		PaperRbtKey:       strings.TrimSpace(os.Getenv("PAPER_RBT_KEY")),
+		PaperRbtSecret:    strings.TrimSpace(os.Getenv("PAPER_RBT_SECRET")),
+		PaperRidpKey:      strings.TrimSpace(os.Getenv("PAPER_RIDP_KEY")),
+		PaperRidpSecret:   strings.TrimSpace(os.Getenv("PAPER_RIDP_SECRET")),
+		PaperSndkKey:      strings.TrimSpace(os.Getenv("PAPER_SNDK_KEY")),
+		PaperSndkSecret:   strings.TrimSpace(os.Getenv("PAPER_SNDK_SECRET")),
+		PaperDipKey:       strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
+		PaperDipSecret:    strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
 
 		AnthropicAPIKey:     strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
 		ClaudeSymbols:       splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
@@ -161,6 +197,9 @@ func Load() (*Config, error) {
 		QuantClfGate:        envBool("QUANT_CLF_GATE", true),
 		QuantRetrain:        envBool("QUANT_RETRAIN", true),
 		QuantTODGate:        envBool("QUANT_TOD_GATE", false),
+		QuantRiseLive:       envBool("QUANT_RISE_LIVE", false),
+		RidpLive:            envBool("RIDP_LIVE", true),
+		QuantAlignGate:      envBool("QUANT_ALIGN_GATE", true),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
 		ResearchLoop:         envBool("RESEARCH_LOOP", true),

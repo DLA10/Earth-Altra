@@ -97,6 +97,16 @@ type DipHook func(DipSignal) string
 // SetHook installs the dip hook (e.g. the quant Agent-2 entry pipeline).
 func (w *Watcher) SetHook(h DipHook) { w.hook = h }
 
+// Notify sends a free-form message to the configured Telegram chat (no-op when disabled).
+// Lets adjacent observers (e.g. the rising watcher) reuse the operator's alert channel
+// without owning Telegram credentials themselves.
+func (w *Watcher) Notify(text string) {
+	if !w.Enabled() {
+		return
+	}
+	w.send(text)
+}
+
 // symbols returns the current symbol set from the provider (nil-safe).
 func (w *Watcher) symbols() []string {
 	if w.symbolsFn == nil {

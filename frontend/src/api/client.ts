@@ -5,6 +5,7 @@ import type {
   Candle,
   ChartRange,
   DecepticonWatchlist,
+  DipRiseReport,
   IntervalRank,
   KeyCheck,
   MarketMovers,
@@ -17,6 +18,7 @@ import type {
   PublicConfig,
   QuantResponse,
   Readiness,
+  RidpReport,
   ScanBar,
   ScanState,
   Scoreboard,
@@ -114,6 +116,18 @@ export const api = {
 
   // Quant pipeline (dip-driven AI team) on the Claude paper account.
   quant: () => req<QuantResponse>("/api/quant"),
+
+  // Dip+Rise desk (Agent 2 dips + rise watcher) — its own paper account.
+  diprise: () => req<DipRiseReport>("/api/diprise"),
+
+  // RIDP two-strategy deterministic paper desk (Rider & Dipper).
+  ridp: () => req<RidpReport>("/api/ridp"),
+
+  // RBT VAE + GARCH + LightGBM mean reversion paper desk.
+  rbt: () => req<{ enabled: boolean; report?: any }>("/api/rbt"),
+
+  // SNDK 1-Minute Micro-Scalper paper desk.
+  sndk: () => req<{ enabled: boolean; report?: any }>("/api/sndk"),
 
   // Eval scoreboard (rolling strategy expectancy + judge calibration).
   evals: () => req<Scoreboard>("/api/evals"),

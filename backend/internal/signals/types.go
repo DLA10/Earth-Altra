@@ -52,6 +52,14 @@ type Signal struct {
 	MaxHoldMin int                `json:"max_hold_min,omitempty"`
 	Quality    float64            `json:"quality"` // deterministic pre-score (rank hint)
 	Features   map[string]float64 `json:"features"`
+
+	// Trend-alignment verdict, stamped at publish (see alignment.go). TrendCell is the
+	// (market, stock) rolling-trend cell, e.g. "mkt-down/sym-down"; AlignOK is whether
+	// the strategy's playbook permits trading that cell. nil = trends unknown at publish
+	// (fail-open). Journaled on both the signal and its counterfactual outcome so the
+	// eval scoreboard can judge each strategy on its playbook cells only.
+	TrendCell string `json:"trend_cell,omitempty"`
+	AlignOK   *bool  `json:"align_ok,omitempty"`
 }
 
 // Context is everything a detector needs beyond the symbol's own session bars.
