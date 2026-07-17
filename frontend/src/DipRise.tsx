@@ -11,6 +11,7 @@ export function DipRise() {
   const [rep, setRep] = useState<DipRiseReport | null>(null);
   const [err, setErr] = useState("");
   const [live, setLive] = useState<Record<string, number>>({});
+  const [timelineAll, setTimelineAll] = useState(false); // false = hide "skip" chatter
   const symbolsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -209,11 +210,13 @@ export function DipRise() {
         ) : (
           <table className="q-table">
             <thead>
-              <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr>
+              <tr><th>Closed</th><th>Held</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr>
             </thead>
             <tbody>
               {[...trades].reverse().map((t, i) => (
                 <tr key={i}>
+                  <td>{fmtTime(t.exit_time)}</td>
+                  <td className="muted">{heldFor(t.entry_time, t.exit_time)}</td>
                   <td className="mono-strong">{t.symbol}</td>
                   <td>{t.qty}</td>
                   <td>${t.entry_price.toFixed(2)}</td>
@@ -227,9 +230,20 @@ export function DipRise() {
         )}
       </div>
 
-      {/* The story: every dip, verdict, arm, trigger, expiry, funding, and outcome */}
+      {/* The story: every dip, verdict, arm, trigger, expiry, funding, and outcome.
+          Skip-chatter is hidden by default so the trades don't drown in it. */}
       <div className="panel">
-        <div className="panel-title">Timeline — the last 2 days, newest first ({(rep.events ?? []).length})</div>
+        <div className="panel-title">
+          Timeline — the last 2 days, newest first (
+          {(rep.events ?? []).filter((ev) => timelineAll || ev.event !== "skip").length}
+          {!timelineAll && ` of ${(rep.events ?? []).length}`})
+          <button
+            onClick={() => setTimelineAll(!timelineAll)}
+            style={{ marginLeft: 10, fontSize: "0.8em", cursor: "pointer" }}
+          >
+            {timelineAll ? "hide skips" : `show all (${(rep.events ?? []).length})`}
+          </button>
+        </div>
         {(rep.events ?? []).length === 0 ? (
           <p className="muted">No dip/rise activity journaled yet.</p>
         ) : (
@@ -238,15 +252,17 @@ export function DipRise() {
               <tr><th>Time</th><th>Who</th><th>Event</th><th>Symbol</th><th>What happened</th></tr>
             </thead>
             <tbody>
-              {(rep.events ?? []).map((ev, i) => (
-                <tr key={i} className={ev.event === "skip" ? "muted" : ""}>
-                  <td>{fmtTime(ev.time)}</td>
-                  <td>{agentLabel(ev.agent)}</td>
-                  <td>{ev.event}</td>
-                  <td className="mono-strong">{ev.symbol}</td>
-                  <td style={{ whiteSpace: "pre-wrap" }}>{ev.note}</td>
-                </tr>
-              ))}
+              {(rep.events ?? [])
+                .filter((ev) => timelineAll || ev.event !== "skip")
+                .map((ev, i) => (
+                  <tr key={i} className={ev.event === "skip" ? "muted" : ""}>
+                    <td>{fmtTime(ev.time)}</td>
+                    <td>{agentLabel(ev.agent)}</td>
+                    <td>{ev.event}</td>
+                    <td className="mono-strong">{ev.symbol}</td>
+                    <td style={{ whiteSpace: "pre-wrap" }}>{ev.note}</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         )}
@@ -261,6 +277,16 @@ function fmtTime(iso: string): string {
   return isNaN(d.getTime())
     ? iso
     : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// heldFor renders how long a closed trade was held, e.g. "14m" or "1h05m".
+function heldFor(entryIso: string, exitIso: string): string {
+  const a = new Date(entryIso).getTime();
+  const b = new Date(exitIso).getTime();
+  if (isNaN(a) || isNaN(b) || b <= a) return "—";
+  const mins = Math.round((b - a) / 60000);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, "0")}m`;
 }
 
 function agentLabel(agent: DipRiseEvent["agent"]): string {

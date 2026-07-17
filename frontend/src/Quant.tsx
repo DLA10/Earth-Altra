@@ -360,10 +360,11 @@ export function Quant() {
           <p className="muted">None yet.</p>
         ) : (
           <table className="q-table">
-            <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Closed</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th></tr></thead>
             <tbody>
               {[...trades].reverse().map((t, i) => (
                 <tr key={i}>
+                  <td>{new Date(t.exit_time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
                   <td className="mono-strong">{t.symbol}</td>
                   <td>{t.qty}</td>
                   <td>${t.entry_price.toFixed(2)}</td>
