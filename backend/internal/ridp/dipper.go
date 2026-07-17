@@ -20,8 +20,10 @@ func (m *Manager) scanDipperEntries(now time.Time) {
 		d := m.daily[sym]
 		_, held := m.open[sym]
 		fired := m.entered["dipper|"+sym+"|"+today]
+		ghostQty := m.livePos[sym] // untracked shares present = don't pyramid onto a leak
+		cooling := time.Since(m.lastExit[sym]) < 90*time.Second
 		m.mu.Unlock()
-		if held || fired || d == nil || !d.Triggered || d.ATR <= 0 || d.AsOf != today {
+		if held || fired || cooling || ghostQty >= 1 || d == nil || !d.Triggered || d.ATR <= 0 || d.AsOf != today {
 			continue
 		}
 		last := m.lastPrice(sym)

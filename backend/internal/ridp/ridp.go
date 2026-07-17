@@ -616,9 +616,21 @@ func (m *Manager) openPosition(strategy, sym string, qty float64, atr, hardStop 
 		case qerr == nil && q2 > 0:
 			fq = q2
 		case qerr == nil:
-			// Confirmed: nothing filled and nothing held. Safe to stop here.
-			m.journal(strategy, "error", sym, "entry not confirmed filled (position confirmed empty)")
-			return
+			// Position empty RIGHT NOW — but that does NOT mean the order is dead. In the
+			// opening auction fills land well past our confirm window; walking away here
+			// while the order still works is how DIPPER's first-ever entries churned into
+			// ghosts on 2026-07-17. Walk away ONLY when the ORDER is confirmed terminal.
+			if _, _, st, oerr := m.broker.Order(id); oerr == nil &&
+				(st == "canceled" || st == "rejected" || st == "expired") {
+				m.journal(strategy, "error", sym, "entry order "+st+" unfilled — no position")
+				return
+			}
+			// Order alive (or unreadable): it WILL fill — track the requested quantity.
+			// If it somehow dies unfilled, the books over-claim and the manage loop
+			// finalizes against the flat account harmlessly; exits always sell the
+			// account's real quantity.
+			fq = qty
+			m.journal(strategy, "entry", sym, "order still working past confirm window — tracking requested qty")
 		default:
 			// Can't confirm either way (e.g. rate-limited). An accepted market order on a
 			// liquid name essentially always fills — assume the requested qty and track

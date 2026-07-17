@@ -27,8 +27,10 @@ func (m *Manager) scanRiderEntries(now time.Time, sessionMin int) {
 		_, held := m.open[sym]
 		done := m.entered[sym]
 		d := m.daily[sym]
+		ghostQty := m.livePos[sym] // untracked shares present = don't pyramid onto a leak
+		cooling := time.Since(m.lastExit[sym]) < 90*time.Second
 		m.mu.Unlock()
-		if held || done || d == nil || d.AvgVol <= 0 {
+		if held || done || cooling || ghostQty >= 1 || d == nil || d.AvgVol <= 0 {
 			continue
 		}
 		bars := m.engine.Snapshot(sym, 1)
