@@ -11,42 +11,35 @@ Status legend: 🔵 built, needs go-live confirm · 🟡 designed, awaiting deci
 
 ---
 
-## Item 1 — REVERTER knife filters  🟡 DECIDE
+## Item 1 — REVERTER knife filters  🟡 OBSERVING ONE MORE WEEK (full spec: `REVERTER_FILTERS.md`)
 
-**Problem:** REVERTER buys −1.5σ dips and exits at the mean. It bleeds when the whole tape
-slides: it keeps buying dips into a falling market whose mean is *also* falling, so the
-dips never bounce and the −4σ stops fire in clusters. 2026-07-17: 28 stop-outs in one
-hour; the exit stops worked (losses capped) but the entries were catching knives. Avg loss
-≈ 3× avg win, so it needs ~75% win rate to break even; it's running ~60–69% on knife days.
+**The three filters (final form after tuning), entry-side only, all env-dialed:**
+- **Green-confirm** — only buy if the current 1-min bar is green (don't grab a falling
+  knife). Single strongest filter; makes the old "falling-anvil" idea redundant.
+- **Dock (−0.2σ)** — skip if the symbol's own 15-min mean is itself sinking fast. Per-symbol,
+  not a market switch — keeps trading calm names on a red-QQQ day.
+- **Breaker (3 stops / 10-min window / 15-min pause)** — 3 REVERTER stop-outs in 10 min →
+  pause new entries 15 min. Tuning showed trip-early + rest-long beats the original 10-min
+  pause and beats raising the stop count.
 
-**Solutions (three filters, entry-side only, exits/stops untouched, all env-dialed):**
-- **#1 Falling-anvil** — skip if the last 1-min drop is *bigger* than the prior one (fall
-  accelerating = anvil, not rubber band). Buy only when the fall is decelerating.
-- **#3 Sinking-dock** — skip if the symbol's own 15-min mean fell > ~0.3σ over 5 min (the
-  "average" it's reverting to is itself collapsing). Per-symbol, NOT market-wide — this is
-  the key: it keeps trading calm stocks even on a red-QQQ day (operator rejected a QQQ
-  kill-switch for exactly this reason).
-- **#4 Circuit breaker** — 3 REVERTER stop-outs within 10 min → pause NEW entries for 10
-  min (exits keep running). Uses our own realized stops as the knife alarm; re-trips only
-  on fresh stop-outs, self-clears when the tape calms.
-
-**Replay evidence (2026-07-17 midday, 233 trades, actual −$479.41):**
-| Config | Day net | Win rate | Profit factor | Trades |
+**14-day backtest (2026-06-29…07-17, faithful replay of reverter.go), frictionless:**
+| Config | Net | Trades | Win% | PF |
 |---|---|---|---|---|
-| none (actual) | −$479 | 45.5% | 0.49 | 233 |
-| #1 anvil | −$322 | 46% | 0.53 | 180 |
-| #3 dock | −$260 | 43% | 0.46 | 109 |
-| **#4 breaker** | **−$6** | **60%** | **0.96** | 40 |
-| **all three** | **+$21** | **62%** | **1.29** | 21 |
-Breaker timeline: 6 trips today, all inside the slide, ZERO false alarms in the good hours
-(it can't trip during a winning streak — needs 3 stops). Good morning hour untouched.
+| NONE | −$2,433 | 11,584 | 56% | 0.92 |
+| dock+green | −$259 | 1,183 | 57% | 0.91 |
+| **dock+green+breaker(15m)** | **−$100** | 1,018 | 58% | 0.96 |
 
-**Recommendation:** implement all three; #4 is the star (improves trade *quality*, not just
-count). Journal every skip with reason + counterfactual so each filter earns its keep in a
-week. Caveat: replay slightly flatters filters (skipped trade might've filled a minute later).
-Scripts: `scratchpad/filter_replay2.py`, `breaker_timeline.py` (re-run for full-day data).
+**Two hard findings:** (1) the filters cut the loss ~96% — real and worth having; (2) even
+filtered + frictionless, REVERTER stays slightly NEGATIVE (PF < 1) and is savagely
+cost-sensitive (−$100 → −$656 at 2bp). Fidelity check: on the two live days the frictionless
+backtest was $750–1,230/day BETTER than reality — the gap is fill slippage, so absolute P&L
+is optimistic; only the *relative* ranking is trustworthy. Verdict: filters = damage control,
+not an edge. REVERTER has not shown a profitable day yet.
 
-**Decision needed:** all three / subset / none / collect another clean day first.
+**Current stance (operator, 2026-07-18):** NOT implementing yet — observing one more week of
+live REVERTER, then revisit. If still negative, bench via `RIDP_REVERTER_TOP_N=0` and move
+attention to RIDER / signal desk. Full detail, examples, dials, and scripts in
+**`REVERTER_FILTERS.md`**.
 
 ---
 
