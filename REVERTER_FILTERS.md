@@ -124,6 +124,43 @@ Its honest role is a cheap live experiment that has, so far, returned a negative
 the filtered live journal is still negative after the observation week, bench it
 (`RIDP_REVERTER_TOP_N=0`) and redeploy attention to the momentum side (RIDER) / signal desk.
 
+## PROPOSED CHANGE (2026-07-18) — limit-sell the profit exit (NOT yet implemented)
+
+**Idea (operator):** REVERTER's profit exit is a sell *into rising price* (price returning
+up to the mean) — the ideal case for a resting LIMIT order that CAPTURES the spread instead
+of paying it. So: **place a resting limit sell at the mean (entry + 1.5σ) at entry time;
+keep the emergency stop as a market/exchange stop; keep the entry at market.** ("Limit for
+selling only, market for buying" — limiting the entry would cause adverse selection.)
+
+**8-week validation (all downloaded data, ~48 days, corrected proper limit-fill model —
+profit fills only when the bar high reaches the target; stop-fills-first = pessimistic):**
+
+| Config | Frictionless | Trades | Market @1/2bp | Limit-sell @1/2bp |
+|---|--:|--:|--|--|
+| No filters | −$536 | 36,154 | −10.4k / −20.4k | −7.4k / −14.2k |
+| Green+Dock | +$205 | 4,038 | −904 / −2,013 | −563 / −1,331 |
+| **All three** | **+$759** | 3,535 | −212 / −1,182 | **+93 / −573** |
+
+Regime (all-three, 2bp): May(good) LIMIT +$166 vs MKT −$109; Jun(neutral) +$28 vs −$143;
+Jul(bad) −$767 vs −$930. Limit-sell **flips good/neutral regimes positive at 2bp**, softens
+(doesn't cure) the bad regime.
+
+**Verdict:** limit-sell is a genuine, consistent improvement — it roughly halves the cost
+drag and pushes break-even from just under 1bp to ~1.2bp. It is NOT a silver bullet:
+filtered+limit REVERTER is still only positive below ~1.2bp and still loses in a genuinely
+bad regime. This model is the PESSIMISTIC bound (stop-fills-first); reality is between it and
+the optimistic run, so the true benefit is likely a bit better. The deciding unknown remains
+the REAL limit fill quality / slippage — measurable only live.
+
+**Levers tested, both empty:** (A) target a hair below the mean — no measurable backtest
+help (its real benefit is fill-rate, which a bar backtest can't capture); (B) dock threshold
+— the current −0.2σ is already optimal (beats −0.1 and −0.3/−0.4). No free tuning gains.
+
+**To implement (after live observation):** in `reverter.go`, change the profit exit from
+"detect z≥0 → market sell" to "place a resting limit sell at entry+1.5σ at entry time";
+leave the exchange stop as-is. Env-flag it (e.g. `RIDP_REVERTER_LIMIT_EXIT`). Then run live
+and measure actual fill rate + slippage — the last real unknown.
+
 ## Scripts (session scratchpad, re-runnable)
 `bt_fetch.py` (download SIP), `bt_replay.py` (14-day filter replay + cost + fidelity),
 `filter_replay2.py` / `filter_table3.py` (single-day rich tables), `breaker_sweep.py`

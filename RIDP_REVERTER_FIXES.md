@@ -11,6 +11,38 @@ Status legend: 🔵 built, needs go-live confirm · 🟡 designed, awaiting deci
 
 ---
 
+## 2026-07-18 — 8-week backtest verdicts (SIP 1-min, out-of-sample tested; these RESET priorities)
+
+We downloaded ~48 trading days of SIP data (May–Jul) and rigorously backtested each strategy
+(in-sample + holdout + 4 final weeks), outlier-checked and cost-swept. Hard findings:
+
+- **REVERTER** — real but razor-thin edge; only positive below ~1–1.5bp slippage. Filters =
+  regime insurance (turn a wild ±$2–8k/2wk swing into a consistent small result). Limit-sell
+  the profit exit helps (see `REVERTER_FILTERS.md`). Verdict: **the one keeper candidate**,
+  but hinges entirely on real fill quality → observe live, then decide.
+- **RIDER** — **confirmed systematic LOSER out-of-sample** (−$1,121 in-sample, −$2,265 holdout;
+  not outlier-driven). The open (09:45–10:30) is a money-pit in BOTH regimes — systematic
+  momentum-buying gets faked out. The live 6/6 morning winners were survivorship. **Bench
+  candidate** (`RIDP_RIDER_SLOTS`/pond). This makes Items 5 & 6 (RIDER refinements) LOW
+  priority — refining a losing strategy.
+- **SNDK** — the "+$88" was FAKE (top-3 trades = 195% of net; pre-market entry bug). No edge.
+- **Dip+rise pure-code (no LLM)** — viable (breakeven-ish, so Agent 2 adds no provable edge)
+  but the "+$56" best config was FAKE too (one day = 89% of net). No robust edge.
+- **Time-of-day** — a modest REAL pattern survives 11 weeks: 10:00–10:30 reliably worst
+  (loses 8/11 wks), midday–afternoon (esp. 13:30, 10/11 wks) reliably leans positive. BUT
+  it's directional-not-magnitude and the filters already approximate it — not a separate
+  money-maker. Don't hardcode hours.
+- **Slippage is the dominant killer** (measured ~12bp on chaos days; ~1–2bp clean is the
+  target). Biggest levers: LIMIT orders (esp. REVERTER profit exits), fewer trades (filters),
+  liquid names. A VPS helps UPTIME (worth it after the laptop-off incident) not slippage.
+
+**Bottom line:** of everything, only **filtered + limit-sell REVERTER** shows a plausible
+(thin) edge, and only at low slippage. The decision now is execution-quality-bound, not
+strategy-bound — which is why the remaining work is "measure real fills live," not "invent
+more strategies."
+
+---
+
 ## Item 1 — REVERTER knife filters  🟡 OBSERVING ONE MORE WEEK (full spec: `REVERTER_FILTERS.md`)
 
 **The three filters (final form after tuning), entry-side only, all env-dialed:**
