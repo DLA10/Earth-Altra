@@ -129,6 +129,8 @@ export const api = {
   // SNDK 1-Minute Micro-Scalper paper desk.
   sndk: () => req<{ enabled: boolean; report?: any }>("/api/sndk"),
 
+  breadcrumbs: () => req<{ enabled: boolean; report?: any }>("/api/breadcrumbs"),
+
   // Eval scoreboard (rolling strategy expectancy + judge calibration).
   evals: () => req<Scoreboard>("/api/evals"),
 

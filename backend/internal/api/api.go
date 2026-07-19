@@ -78,6 +78,9 @@ type Server struct {
 	// Sndk returns the SNDK paper desk report (nil-safe; set by main).
 	Sndk func() interface{}
 
+	// Breadcrumbs returns the Breadcrumbs generalized-scalper desk report (nil-safe; set by main).
+	Breadcrumbs func() interface{}
+
 	// movers-news badge cache (Alpaca-only, cheap): short TTL keeps the board snappy.
 	mnMu   sync.Mutex
 	mnResp *MoversNews
@@ -236,6 +239,7 @@ func (s *Server) Routes(r chi.Router) {
 	r.Get("/api/ridp", s.ridpReport)
 	r.Get("/api/rbt", s.rbtReport)
 	r.Get("/api/sndk", s.sndkReport)
+	r.Get("/api/breadcrumbs", s.breadcrumbsReport)
 
 	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
 	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {

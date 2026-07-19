@@ -69,6 +69,21 @@ type Config struct {
 	PaperRidpSecret string
 	PaperSndkKey    string
 	PaperSndkSecret string
+	// Breadcrumbs desk: the generalized volatility scalper (SNDK pipeline extended to the
+	// validated 22-name volatile basket) with a hard budget tracker and leak-proof book.
+	// Its OWN paper account (PAPER_BREADCRUMBS_*). Empty keys = desk OFF.
+	PaperBreadcrumbsKey    string
+	PaperBreadcrumbsSecret string
+	BreadcrumbsLive        bool     // place paper orders (false = shadow log-only)
+	BreadcrumbsUniverse    []string // the volatile basket (BC_UNIVERSE)
+	BreadcrumbsBudget      float64  // hard cap on total deployed notional (USD)
+	BreadcrumbsNotional    float64  // per-trade slice (USD)
+	BreadcrumbsMaxSlots    int      // max concurrent positions (0 = one per symbol)
+	BreadcrumbsTPPct       float64  // target % (arms trail) — must match the model labels
+	BreadcrumbsSLPct       float64  // hard stop %
+	BreadcrumbsTrailPct    float64  // trailing width %
+	BreadcrumbsLock        bool     // profit-lock: floor the trail at the target
+	BreadcrumbsRetrain     bool     // auto-retrain the pooled model monthly (rolling) + boot catch-up
 	// Dip+rise desk (Agent 2 dip entries + the rise watcher — one strategy family, both
 	// fed by the Telegram dip watcher). Runs on its OWN paper account, separate from the
 	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
@@ -178,28 +193,40 @@ func Load() (*Config, error) {
 		PaperRidpSecret:   strings.TrimSpace(os.Getenv("PAPER_RIDP_SECRET")),
 		PaperSndkKey:      strings.TrimSpace(os.Getenv("PAPER_SNDK_KEY")),
 		PaperSndkSecret:   strings.TrimSpace(os.Getenv("PAPER_SNDK_SECRET")),
-		PaperDipKey:       strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
-		PaperDipSecret:    strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
 
-		AnthropicAPIKey:     strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
-		ClaudeSymbols:       splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
-		OllamaEndpoint:      envStr("OLLAMA_ENDPOINT", "http://localhost:11434"),
-		OllamaModel:         envStr("OLLAMA_MODEL", "gemma2:2b"),
-		QuantEntryModel:     envStr("QUANT_ENTRY_MODEL", "claude-haiku-4-5"),
-		QuantExitModel:      envStr("QUANT_EXIT_MODEL", "claude-haiku-4-5"),
-		QuantReviewModel:    envStr("QUANT_REVIEW_MODEL", "claude-opus-4-8"),
-		QuantTrailPct:       envFloat("QUANT_TRAIL_PCT", 1.5),
-		QuantLive:           envBool("QUANT_LIVE", true),
-		QuantOvernightCap:   envFloat("QUANT_OVERNIGHT_CAP", 0),
-		QuantSignalsLive:    envBool("QUANT_SIGNALS_LIVE", true),
-		QuantJudgeModel:     envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
-		QuantDailyLossCap:   envFloat("QUANT_DAILY_LOSS_CAP", 150),
-		QuantClfGate:        envBool("QUANT_CLF_GATE", true),
-		QuantRetrain:        envBool("QUANT_RETRAIN", true),
-		QuantTODGate:        envBool("QUANT_TOD_GATE", false),
-		QuantRiseLive:       envBool("QUANT_RISE_LIVE", false),
-		RidpLive:            envBool("RIDP_LIVE", true),
-		QuantAlignGate:      envBool("QUANT_ALIGN_GATE", true),
+		PaperBreadcrumbsKey:    strings.TrimSpace(os.Getenv("PAPER_BREADCRUMBS_KEY")),
+		PaperBreadcrumbsSecret: strings.TrimSpace(os.Getenv("PAPER_BREADCRUMBS_SECRET")),
+		BreadcrumbsLive:        envBool("BC_LIVE", true),
+		BreadcrumbsBudget:      envFloat("BC_BUDGET", 200000),
+		BreadcrumbsNotional:    envFloat("BC_NOTIONAL", 2000),
+		BreadcrumbsMaxSlots:    int(envFloat("BC_MAX_SLOTS", 0)),
+		BreadcrumbsTPPct:       envFloat("BC_TP_PCT", 0.0057),
+		BreadcrumbsSLPct:       envFloat("BC_SL_PCT", 0.0071),
+		BreadcrumbsTrailPct:    envFloat("BC_TRAIL_PCT", 0.002),
+		BreadcrumbsLock:        envBool("BC_LOCK", true),
+		BreadcrumbsRetrain:     envBool("BC_RETRAIN", true),
+		PaperDipKey:            strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
+		PaperDipSecret:         strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
+
+		AnthropicAPIKey:      strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
+		ClaudeSymbols:        splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
+		OllamaEndpoint:       envStr("OLLAMA_ENDPOINT", "http://localhost:11434"),
+		OllamaModel:          envStr("OLLAMA_MODEL", "gemma2:2b"),
+		QuantEntryModel:      envStr("QUANT_ENTRY_MODEL", "claude-haiku-4-5"),
+		QuantExitModel:       envStr("QUANT_EXIT_MODEL", "claude-haiku-4-5"),
+		QuantReviewModel:     envStr("QUANT_REVIEW_MODEL", "claude-opus-4-8"),
+		QuantTrailPct:        envFloat("QUANT_TRAIL_PCT", 1.5),
+		QuantLive:            envBool("QUANT_LIVE", true),
+		QuantOvernightCap:    envFloat("QUANT_OVERNIGHT_CAP", 0),
+		QuantSignalsLive:     envBool("QUANT_SIGNALS_LIVE", true),
+		QuantJudgeModel:      envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
+		QuantDailyLossCap:    envFloat("QUANT_DAILY_LOSS_CAP", 150),
+		QuantClfGate:         envBool("QUANT_CLF_GATE", true),
+		QuantRetrain:         envBool("QUANT_RETRAIN", true),
+		QuantTODGate:         envBool("QUANT_TOD_GATE", false),
+		QuantRiseLive:        envBool("QUANT_RISE_LIVE", false),
+		RidpLive:             envBool("RIDP_LIVE", true),
+		QuantAlignGate:       envBool("QUANT_ALIGN_GATE", true),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
 		ResearchLoop:         envBool("RESEARCH_LOOP", true),
@@ -221,6 +248,9 @@ func Load() (*Config, error) {
 	}
 
 	c.Symbols = splitCSV(envStr("SYMBOLS", "SNDK,SPCX,STX,NVDA,MRVL"))
+	// The validated 22-name high-volatility basket (kept in sync with ml/train_breadcrumbs_model.py).
+	c.BreadcrumbsUniverse = splitCSV(envStr("BC_UNIVERSE",
+		"NVDA,AMD,MU,SMCI,MRVL,ARM,PLTR,COIN,TSLA,MSTR,IONQ,CRWV,WDC,ON,LRCX,DELL,ANET,SNOW,HOOD,RGTI,ASTS,RIOT"))
 	c.AllowedOrigins = splitCSV(envStr("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"))
 
 	// Derive endpoints from the paper flag unless explicitly overridden.

@@ -24,6 +24,7 @@ import (
 
 	"live-optimus/backend/internal/alpaca"
 	"live-optimus/backend/internal/api"
+	"live-optimus/backend/internal/breadcrumbs"
 	"live-optimus/backend/internal/candles"
 	"live-optimus/backend/internal/config"
 	"live-optimus/backend/internal/dipwatch"
@@ -34,11 +35,11 @@ import (
 	"live-optimus/backend/internal/hub"
 	"live-optimus/backend/internal/quant"
 	"live-optimus/backend/internal/rbt"
-	"live-optimus/backend/internal/sndk"
 	"live-optimus/backend/internal/ridp"
 	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
 	"live-optimus/backend/internal/signals"
+	"live-optimus/backend/internal/sndk"
 	"live-optimus/backend/internal/watchlist"
 )
 
@@ -239,9 +240,9 @@ func main() {
 	// rules as before — only the symbol set was broadened. Never touches the order/stream path.
 	dw := dipwatch.New(cfg.TelegramBotToken, cfg.TelegramChatID, watchMgr.All, engine, client)
 
-	var quantEngine *quant.Engine        // exposed to the API after srv is built
-	var quantManagers []*quant.Manager   // both desk managers — wired to EnsureLive after srv is built
-	var evalsFn func() interface{}       // eval scoreboard accessor for /api/evals
+	var quantEngine *quant.Engine      // exposed to the API after srv is built
+	var quantManagers []*quant.Manager // both desk managers — wired to EnsureLive after srv is built
+	var evalsFn func() interface{}     // eval scoreboard accessor for /api/evals
 	// AI quant pipeline — Agent 2 (entry decision) in SHADOW mode. On each confirmed dip, if the
 	// symbol is in today's curated universe (backend/data/daily_universe.json), Opus decides
 	// buy/no_buy; the decision is logged (backend/data/decisions/) and its label is appended to
@@ -670,6 +671,30 @@ func main() {
 		log.Printf("sndk: initialized and running on paper account")
 	} else {
 		log.Printf("sndk: disabled (no PAPER_SNDK keys — strict one account per desk)")
+	}
+
+	// Breadcrumbs: the generalized volatility scalper (SNDK pipeline extended to the
+	// validated 22-name volatile basket) with a hard budget tracker + a leak-proof book
+	// reconciled against the broker every cycle. STRICT one-account-per-desk: its OWN keys
+	// (PAPER_BREADCRUMBS_*) — empty keys = benched, no fallback.
+	if cfg.PaperBreadcrumbsKey != "" && cfg.PaperBreadcrumbsSecret != "" {
+		etzBC, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzBC = time.UTC
+		}
+		bcBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperBreadcrumbsKey, cfg.PaperBreadcrumbsSecret)
+		bcMgr := breadcrumbs.New(bcBroker, engine, etzBC, "data", cfg.BreadcrumbsLive,
+			cfg.BreadcrumbsUniverse, cfg.BreadcrumbsBudget, cfg.BreadcrumbsNotional, cfg.BreadcrumbsMaxSlots,
+			cfg.BreadcrumbsTPPct, cfg.BreadcrumbsSLPct, cfg.BreadcrumbsTrailPct, cfg.BreadcrumbsLock)
+		bcMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		bcMgr.Start(ctx)
+		if cfg.BreadcrumbsRetrain {
+			bcMgr.StartRetrain(ctx) // monthly rolling retrain + boot catch-up (hands-off)
+		}
+		srv.Breadcrumbs = func() interface{} { return bcMgr.Report() }
+		log.Printf("breadcrumbs: initialized and running on paper account")
+	} else {
+		log.Printf("breadcrumbs: disabled (no PAPER_BREADCRUMBS keys — strict one account per desk)")
 	}
 
 	r := chi.NewRouter()

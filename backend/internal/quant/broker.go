@@ -193,6 +193,30 @@ func (b *Broker) MarketBracketOrder(sym string, qty float64, side string, target
 	})
 }
 
+// CancelOpenOrders cancels every OPEN order for one symbol. A standalone stop is NOT
+// auto-canceled when its position closes (only bracket/OCO siblings are), so this is used to
+// clear an orphaned protective stop after a position is closed outside the normal exit path,
+// and to guarantee exactly one valid stop when rehydrating after a restart.
+func (b *Broker) CancelOpenOrders(sym string) error {
+	rb, code, err := b.do(http.MethodGet, "/orders?status=open&limit=100&symbols="+url.QueryEscape(sym), nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("open orders (%d): %s", code, strings.TrimSpace(string(rb)))
+	}
+	var ords []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rb, &ords); err != nil {
+		return err
+	}
+	for _, o := range ords {
+		_ = b.Cancel(o.ID)
+	}
+	return nil
+}
+
 // Cancel cancels one order (e.g. the old stop before placing a tighter one, or before a market exit).
 func (b *Broker) Cancel(id string) error {
 	if id == "" {

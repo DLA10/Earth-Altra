@@ -59,6 +59,15 @@ func (s *Server) sndkReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": true, "report": s.Sndk()})
 }
 
+// breadcrumbsReport returns the Breadcrumbs generalized-scalper desk state for its page.
+func (s *Server) breadcrumbsReport(w http.ResponseWriter, r *http.Request) {
+	if s.Breadcrumbs == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": true, "report": s.Breadcrumbs()})
+}
+
 // quantAgents lists every agent on the desk with its ACTUAL configured model and whether
 // it's live — the single source of truth is the config, so the page can't drift out of
 // sync with what's really running (which is how the stale "Opus" label happened).
