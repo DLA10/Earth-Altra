@@ -96,8 +96,13 @@ type Config struct {
 	ClaudeSymbols []string
 
 	// Quant pipeline (dip-driven multi-agent). Agent 4 sentiment runs on a local Ollama model.
-	OllamaEndpoint   string
-	OllamaModel      string
+	OllamaEndpoint string
+	OllamaModel    string
+	// QuantSentiment gates Agent 4 (the local-Ollama sentiment enrichment). It is ADVISORY
+	// only — its score merely tweaks Agent 2's snapshot and allocator ranking, and the whole
+	// dip/rise desk runs fine without it (as it already does when Ollama is offline). false =
+	// skip wiring Agent 4 entirely (no goroutine, no failed-request log spam). Default true.
+	QuantSentiment   bool
 	QuantEntryModel  string  // Agent 2 (entry) model
 	QuantExitModel   string  // Agent 3 (exit) model
 	QuantReviewModel string  // daily review model
@@ -212,6 +217,7 @@ func Load() (*Config, error) {
 		ClaudeSymbols:        splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
 		OllamaEndpoint:       envStr("OLLAMA_ENDPOINT", "http://localhost:11434"),
 		OllamaModel:          envStr("OLLAMA_MODEL", "gemma2:2b"),
+		QuantSentiment:       envBool("QUANT_SENTIMENT", true),
 		QuantEntryModel:      envStr("QUANT_ENTRY_MODEL", "claude-haiku-4-5"),
 		QuantExitModel:       envStr("QUANT_EXIT_MODEL", "claude-haiku-4-5"),
 		QuantReviewModel:     envStr("QUANT_REVIEW_MODEL", "claude-opus-4-8"),

@@ -282,10 +282,19 @@ func main() {
 			}
 			return out
 		}
-		qAgent4 := quant.NewAgent4(cfg.OllamaEndpoint, cfg.OllamaModel, newsFn, etz)
-		qEngine.SetAgent4(qAgent4)
-		if qAgent2.Enabled() {
-			go qAgent4.Run(ctx, qUniverse.Symbols) // no point scoring sentiment if Agent 2 is idle
+		// Agent 4 is advisory only and nil-safe everywhere (engine.sentimentScore / snapshot
+		// both guard on agent4 == nil), so when QUANT_SENTIMENT=false we simply never wire it:
+		// the dip/rise desk runs identically to how it does with Ollama offline, minus the
+		// per-symbol failed-request log spam. Live execution, RIDP, SNDK, RBT and Breadcrumbs
+		// never touch this path.
+		if cfg.QuantSentiment {
+			qAgent4 := quant.NewAgent4(cfg.OllamaEndpoint, cfg.OllamaModel, newsFn, etz)
+			qEngine.SetAgent4(qAgent4)
+			if qAgent2.Enabled() {
+				go qAgent4.Run(ctx, qUniverse.Symbols) // no point scoring sentiment if Agent 2 is idle
+			}
+		} else {
+			log.Printf("quant: Agent 4 sentiment disabled (QUANT_SENTIMENT=false)")
 		}
 
 		// Pick up a freshly-written daily_universe.json (pre-market session) without a restart.

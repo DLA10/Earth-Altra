@@ -83,7 +83,7 @@ func (s *Server) quantAgents() []quant.AgentInfo {
 		{Name: "Agent 2 · Entry", Model: c.QuantEntryModel, Role: "buy/no-buy on dips (dip+rise desk)", Live: llm && c.QuantLive && dipArmed},
 		{Name: "Rise watcher", Model: "deterministic (Go)", Role: "confirmed post-dip bounces (dip+rise desk)", Live: c.QuantRiseLive && dipArmed},
 		{Name: "Agent 3 · Exit", Model: c.QuantExitModel, Role: "trailing stop + discretionary exits (both desks)", Live: llm},
-		{Name: "Agent 4 · Sentiment", Model: c.OllamaModel + " (local)", Role: "advisory sentiment", Live: true},
+		{Name: "Agent 4 · Sentiment", Model: c.OllamaModel + " (local)", Role: "advisory sentiment", Live: c.QuantSentiment},
 		{Name: "Reviewer", Model: c.QuantReviewModel, Role: "daily report card", Live: llm},
 	}
 }
