@@ -84,6 +84,7 @@ type Config struct {
 	BreadcrumbsTrailPct    float64  // trailing width %
 	BreadcrumbsLock        bool     // profit-lock: floor the trail at the target
 	BreadcrumbsRetrain     bool     // auto-retrain the pooled model monthly (rolling) + boot catch-up
+	BreadcrumbsLossCap     float64  // halt NEW entries once the day's realized P&L ≤ -cap (USD, 0 = disabled)
 	// Dip+rise desk (Agent 2 dip entries + the rise watcher — one strategy family, both
 	// fed by the Telegram dip watcher). Runs on its OWN paper account, separate from the
 	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
@@ -210,6 +211,7 @@ func Load() (*Config, error) {
 		BreadcrumbsTrailPct:    envFloat("BC_TRAIL_PCT", 0.002),
 		BreadcrumbsLock:        envBool("BC_LOCK", true),
 		BreadcrumbsRetrain:     envBool("BC_RETRAIN", true),
+		BreadcrumbsLossCap:     envFloat("BC_DAILY_LOSS_CAP", 500),
 		PaperDipKey:            strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
 		PaperDipSecret:         strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
 

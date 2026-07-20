@@ -126,6 +126,7 @@ func (m *Manager) tick() {
 	if mins >= 9*60+30 && mins <= 16*60 {
 		m.monitorCatastrophicStops()
 		m.manageStrategyExits(now)
+		m.reconcileOrphans()
 	}
 
 	// Entry Checks (run on the closed 1m candle boundary)
@@ -183,6 +184,34 @@ func (m *Manager) monitorCatastrophicStops() {
 			log.Printf("sndk: SNDK no longer held on the exchange — recording exit")
 			m.recordExit(px, "safety_exit")
 		}
+	}
+}
+
+// reconcileOrphans sweeps the account for SNDK shares the book doesn't know about and
+// safely flattens them. Before this sweep existed, a phantom exit (book cleared while the
+// sell never actually landed) stranded shares FOREVER: both exit monitors bail when the
+// book is flat, so nothing ever looked at the account again, and the scalper kept buying
+// 2 more on top — ~32 untracked, unprotected shares accumulated over 4 days in 2026-07.
+// Only runs while the book is flat: when a position is tracked, the exit paths (which
+// flatten the FULL account quantity) own the account.
+func (m *Manager) reconcileOrphans() {
+	m.mu.Lock()
+	flat := m.open == nil
+	m.mu.Unlock()
+	if !flat {
+		return
+	}
+	q, err := m.broker.PositionQty("SNDK")
+	if err != nil || q <= 0 {
+		return
+	}
+	log.Printf("sndk: RECONCILE found %.0f untracked SNDK share(s) on the account — flattening for safety", q)
+	// Clear any stale resting orders first (an orphaned stop still holds the shares and
+	// would block the sell with "insufficient qty available").
+	_ = m.broker.CancelOpenOrders("SNDK")
+	coid := fmt.Sprintf("sndk_orphan_exit_%d", time.Now().UnixNano())
+	if _, serr := m.broker.MarketSell("SNDK", q, coid); serr != nil {
+		log.Printf("sndk: orphan flatten failed (%v) — will retry next cycle", serr)
 	}
 }
 
@@ -269,15 +298,30 @@ func (m *Manager) executeExit(price float64, reason string) {
 		}
 	}
 
+	// Sell the FULL account quantity, not the book quantity: if they've drifted apart the
+	// account is the truth (selling more than held is a 403 "not allowed to short" loop;
+	// selling less leaves a remainder stranded).
+	qty := pos.Qty
+	if aq, qerr := m.broker.PositionQty("SNDK"); qerr == nil {
+		if aq <= 0 {
+			// Nothing held — the shares already left (a stop fill we missed or a manual
+			// close). Record the exit; there is nothing to sell.
+			log.Printf("sndk: SNDK no longer held on the account — recording exit, not selling")
+			m.recordExit(price, reason)
+			return
+		}
+		qty = aq
+	}
+
 	coid := fmt.Sprintf("sndk_exit_%d", time.Now().Unix())
-	id, err := m.broker.MarketSell("SNDK", pos.Qty, coid)
+	id, err := m.broker.MarketSell("SNDK", qty, coid)
 	if err != nil {
 		// The stop is already canceled and the sell failed — re-protect IMMEDIATELY so
 		// the position is never left naked, then retry the exit on a later tick. (This
 		// exact gap stranded untracked ghost shares in 2026-07.)
 		log.Printf("sndk: ERROR placing exit order: %v — re-placing protective stop", err)
 		sc := fmt.Sprintf("sndk_stop_%d", time.Now().Unix())
-		if sid, serr := m.broker.StopSell("SNDK", pos.Qty, pos.StopLoss, sc); serr == nil {
+		if sid, serr := m.broker.StopSell("SNDK", qty, pos.StopLoss, sc); serr == nil {
 			m.mu.Lock()
 			if m.open != nil {
 				m.open.StopID = sid
@@ -294,19 +338,72 @@ func (m *Manager) executeExit(price float64, reason string) {
 	if _, ap := m.awaitFill(id, 12*time.Second); ap > 0 {
 		price = ap
 	}
+
+	// PHANTOM-EXIT GUARD: confirm the shares actually LEFT the account before clearing the
+	// book. Going flat on the book while the account still holds shares is the exact bug
+	// that stranded ~32 untracked, unprotected shares over 4 days in 2026-07 — once the
+	// book is flat, the entry scan happily buys on top of the pile.
+	if q, qerr := m.broker.PositionQty("SNDK"); qerr != nil || q > 0 {
+		if qerr != nil {
+			log.Printf("sndk: exit fill unverifiable (%v) — keeping the book open, retrying next tick", qerr)
+			return
+		}
+		log.Printf("sndk: exit incomplete — %.0f share(s) still held; re-protecting and retrying next tick", q)
+		sc := fmt.Sprintf("sndk_stop_%d", time.Now().Unix())
+		sid, serr := m.broker.StopSell("SNDK", q, pos.StopLoss, sc)
+		if serr != nil {
+			log.Printf("sndk: CRITICAL: SNDK remainder held with NO stop, re-protect failed: %v", serr)
+			sid = ""
+		}
+		m.mu.Lock()
+		if m.open != nil {
+			m.open.Qty = q
+			m.open.StopID = sid
+		}
+		m.mu.Unlock()
+		m.saveState()
+		return
+	}
 	m.recordExit(price, reason)
 }
 
-func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+// awaitTerminal polls an order until it reaches a TERMINAL state, returning the last-seen
+// filled qty/avg price and whether a terminal state was observed. It does not bail on the
+// first partial fill — the rest of a market order usually lands moments later.
+func (m *Manager) awaitTerminal(id string, max time.Duration) (float64, float64, bool) {
 	deadline := time.Now().Add(max)
+	var fq, ap float64
 	for time.Now().Before(deadline) {
-		fq, ap, status, err := m.broker.Order(id)
-		if err == nil && fq > 0 && (status == "filled" || status == "partially_filled") {
-			return fq, ap
+		q, p, status, err := m.broker.Order(id)
+		if err == nil {
+			if q > 0 {
+				fq, ap = q, p
+			}
+			switch status {
+			case "filled", "canceled", "expired", "rejected", "replaced", "done_for_day":
+				return fq, ap, true
+			}
 		}
-		time.Sleep(700 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return 0, 0
+	return fq, ap, false
+}
+
+func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+	fq, ap, _ := m.awaitTerminal(id, max)
+	return fq, ap
+}
+
+// settleEntry resolves an entry buy to its FINAL filled quantity; a still-live order at the
+// deadline is canceled and re-read, so the book only ever records what actually filled.
+func (m *Manager) settleEntry(id string) (float64, float64) {
+	fq, ap, terminal := m.awaitTerminal(id, 12*time.Second)
+	if terminal {
+		return fq, ap
+	}
+	_ = m.broker.Cancel(id)
+	fq, ap, _ = m.awaitTerminal(id, 4*time.Second)
+	return fq, ap
 }
 
 func (m *Manager) recordExit(price float64, reason string) {
@@ -423,13 +520,15 @@ func (m *Manager) runEntryScan(now time.Time) {
 		return
 	}
 
-	// Wait for the entry fill (also prevents Alpaca rejecting the StopSell) and record
-	// the ACTUAL filled qty/price so the position, its stop size, and its P&L match
-	// what the account really holds — not the signal's last-bar close.
-	fillQty, fillPx := m.awaitFill(entryID, 12*time.Second)
-	if fillQty > 0 {
-		qty = fillQty
+	// Settle the buy to a TERMINAL state and book ONLY what actually filled (a still-live
+	// order at the deadline is canceled). Booking the intended qty on an unconfirmed fill
+	// is how the book and the account drift apart.
+	fillQty, fillPx := m.settleEntry(entryID)
+	if fillQty < 1 {
+		log.Printf("sndk: entry did not fill in time — canceled, nothing booked")
+		return
 	}
+	qty = fillQty
 	if fillPx > 0 {
 		price = fillPx
 	}

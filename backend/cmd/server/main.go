@@ -694,7 +694,8 @@ func main() {
 		bcBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperBreadcrumbsKey, cfg.PaperBreadcrumbsSecret)
 		bcMgr := breadcrumbs.New(bcBroker, engine, etzBC, "data", cfg.BreadcrumbsLive,
 			cfg.BreadcrumbsUniverse, cfg.BreadcrumbsBudget, cfg.BreadcrumbsNotional, cfg.BreadcrumbsMaxSlots,
-			cfg.BreadcrumbsTPPct, cfg.BreadcrumbsSLPct, cfg.BreadcrumbsTrailPct, cfg.BreadcrumbsLock)
+			cfg.BreadcrumbsTPPct, cfg.BreadcrumbsSLPct, cfg.BreadcrumbsTrailPct, cfg.BreadcrumbsLock,
+			cfg.BreadcrumbsLossCap)
 		bcMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
 		bcMgr.Start(ctx)
 		if cfg.BreadcrumbsRetrain {

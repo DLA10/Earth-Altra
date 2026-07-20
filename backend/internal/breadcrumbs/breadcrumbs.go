@@ -80,6 +80,7 @@ type Manager struct {
 	budget   float64 // hard cap on total deployed notional (USD)
 	notional float64 // per-trade slice (USD) → qty = floor(notional/price)
 	maxSlots int     // max concurrent positions
+	lossCap  float64 // halt NEW entries once today's realized P&L ≤ -lossCap (USD, 0 = disabled)
 
 	// Exit dials (must match the model's % labels).
 	tpPct    float64 // target %, arms trail (default 0.0057)
@@ -88,10 +89,12 @@ type Manager struct {
 	lock     bool    // floor the trail at the target (profit-lock)
 
 	open       map[string]*Position
-	pending    map[string]float64 // symbol → reserved notional for an in-flight entry (not yet in open)
+	pending    map[string]float64   // symbol → reserved notional for an in-flight entry (not yet in open)
+	cooldown   map[string]time.Time // symbol → last exit time (post-exit re-entry embargo)
 	trades     []Trade
-	scanning   bool // guards against overlapping entry scans
-	lastScan   int  // last entry-scan minute (dedupe per-minute boundary)
+	scanning   bool   // guards against overlapping entry scans
+	lastScan   int    // last entry-scan minute (dedupe per-minute boundary)
+	capDay     string // ET day the loss-cap halt was last logged (log once per day)
 	lastRecon  time.Time
 	ensureLive func(string)
 	pyPath     string
@@ -106,11 +109,17 @@ type sig struct {
 	Close       float64 `json:"close"`
 }
 
+// reentryCooldown blocks a fresh entry into a symbol we just exited: the exit sell (and its
+// canceled stop) settle asynchronously on Alpaca, and a new buy while an opposite-side order
+// is still live is rejected as a "potential wash trade" — which then kills the new position's
+// protective stop and forces a safety flatten. 90s ≈ one-to-two scan cycles.
+const reentryCooldown = 90 * time.Second
+
 // New builds the desk. universe/budget/etc come from config; sensible validated defaults are
 // applied for any zero value so a partial .env can't silently disable the guards.
 func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataDir string,
 	live bool, universe []string, budget, notional float64, maxSlots int,
-	tpPct, slPct, trailPct float64, lock bool) *Manager {
+	tpPct, slPct, trailPct float64, lock bool, lossCap float64) *Manager {
 	if etz == nil {
 		etz = time.UTC
 	}
@@ -132,15 +141,19 @@ func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataD
 	if trailPct <= 0 {
 		trailPct = 0.002
 	}
+	if lossCap < 0 {
+		lossCap = 0 // explicit 0 (or nonsense negative) = cap disabled
+	}
 	m := &Manager{
 		broker: broker, engine: engine, etz: etz,
 		dataDir:  filepath.Join(dataDir, "breadcrumbs"),
 		live:     live,
 		universe: universe,
-		budget:   budget, notional: notional, maxSlots: maxSlots,
+		budget:   budget, notional: notional, maxSlots: maxSlots, lossCap: lossCap,
 		tpPct: tpPct, slPct: slPct, trailPct: trailPct, lock: lock,
 		open:     map[string]*Position{},
 		pending:  map[string]float64{},
+		cooldown: map[string]time.Time{},
 		trades:   []Trade{},
 		lastScan: -1,
 	}
@@ -300,7 +313,37 @@ func (m *Manager) clearPending(sym string) {
 
 // ---------------- Entry ----------------
 
+// lossCapHit reports whether today's realized P&L has breached the daily loss cap. Computed
+// from the persisted trades list (not a separate counter) so it survives a restart — the
+// desk can't reset its own bleed by rebooting. Halts NEW entries only; open positions keep
+// being managed and exited normally.
+func (m *Manager) lossCapHit() bool {
+	if m.lossCap <= 0 {
+		return false
+	}
+	day := time.Now().In(m.etz).Format("2006-01-02")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var realized float64
+	for _, t := range m.trades {
+		if t.ClosedAt.In(m.etz).Format("2006-01-02") == day {
+			realized += t.PnL
+		}
+	}
+	if realized <= -m.lossCap {
+		if m.capDay != day {
+			m.capDay = day
+			log.Printf("breadcrumbs: DAILY LOSS CAP hit (realized $%.2f ≤ -$%.0f) — no new entries today", realized, m.lossCap)
+		}
+		return true
+	}
+	return false
+}
+
 func (m *Manager) runEntryScan() {
+	if m.lossCapHit() {
+		return // deep enough in the red for the day — stop opening new risk
+	}
 	// Collect recent 1-min bars for every basket symbol the engine tracks (skip held ones).
 	batch := map[string][]candles.Candle{}
 	m.mu.RLock()
@@ -387,6 +430,14 @@ func (m *Manager) tryEnter(sym string, sigClose, prob float64) {
 		m.mu.Unlock()
 		return
 	}
+	// Post-exit embargo: re-buying a name whose exit sell/stop-cancel is still settling gets
+	// the new position's protective stop rejected as a wash trade (then a forced flatten).
+	if t, ok := m.cooldown[sym]; ok && time.Since(t) < reentryCooldown {
+		m.mu.Unlock()
+		log.Printf("breadcrumbs: %s skipped — exited %.0fs ago (re-entry cooldown %ds)",
+			sym, time.Since(t).Seconds(), int(reentryCooldown.Seconds()))
+		return
+	}
 	// Slots + budget count BOTH open positions and in-flight (pending) entries so concurrent
 	// or in-progress buys can't overshoot either guard.
 	if len(m.open)+len(m.pending) >= m.maxSlots {
@@ -435,12 +486,17 @@ func (m *Manager) tryEnter(sym string, sigClose, prob float64) {
 		log.Printf("breadcrumbs: %s entry order failed: %v", sym, err)
 		return
 	}
-	// Wait for the fill so the stop is sized to the ACTUAL position and P&L matches the account.
-	if fq, fp := m.awaitFill(id, 12*time.Second); fq > 0 {
-		qty = fq
-		if fp > 0 {
-			price = fp
-		}
+	// Settle the order to a TERMINAL state and book only what actually filled. Booking the
+	// intended qty on a slow/partial fill is how the book drifted from the account (book=45
+	// vs account=17), which then mis-sized every stop downstream.
+	fq, fp := m.settleEntry(id)
+	if fq < 1 {
+		log.Printf("breadcrumbs: %s entry did not fill in time — canceled, nothing booked", sym)
+		return
+	}
+	qty = fq
+	if fp > 0 {
+		price = fp
 	}
 
 	tp := price * (1 + m.tpPct)
@@ -452,6 +508,9 @@ func (m *Manager) tryEnter(sym string, sigClose, prob float64) {
 		log.Printf("breadcrumbs: %s protective stop failed (%v) — flattening for safety", sym, sErr)
 		flat := fmt.Sprintf("bc_safety_%s_%d", sym, time.Now().UnixNano())
 		_, _ = m.broker.MarketSell(sym, qty, flat)
+		m.mu.Lock()
+		m.cooldown[sym] = time.Now() // the safety sell needs to settle before any re-buy
+		m.mu.Unlock()
 		return
 	}
 
@@ -500,15 +559,20 @@ func (m *Manager) manageExits(now time.Time) {
 		}
 		// (2) Arm + LOCK: first time price tags the target, move the exchange stop up to the
 		// target so the profit can't be given back below it, then the trail takes over.
+		// The ratchet only fires while the target still sits BELOW the price (same rule as
+		// the trail below: a resting sell-stop above/at market is rejected 422 — and our
+		// price is a 1-min candle close that can lag the live market, so an at-the-money
+		// lock is exactly the case that bounces). If price is sitting ON the target, the
+		// trail step picks the lock up on a later tick once there's room.
 		if !pos.Armed && price >= pos.TargetPrice {
 			pos.Armed = true
 			pos.Peak = math.Max(price, pos.TargetPrice)
-			if m.lock {
+			if m.lock && pos.TargetPrice < price {
 				m.ratchetStopLocked(pos, pos.TargetPrice)
-				pos.Locked = true
+				pos.Locked = pos.StopLoss >= round2(pos.TargetPrice) // StopLoss is 2dp-rounded
 			}
 			m.saveStateLocked()
-			log.Printf("breadcrumbs: %s LOCKED profit @ target $%.2f — trailing begins", sym, pos.TargetPrice)
+			log.Printf("breadcrumbs: %s target $%.2f tagged (locked=%v) — trailing begins", sym, pos.TargetPrice, pos.Locked)
 		}
 		// (3) Trail: ratchet the exchange stop up under the rising peak, floored at the target.
 		// Move it UP only, only when meaningfully higher (≥0.15%, to bound order churn), and
@@ -525,15 +589,34 @@ func (m *Manager) manageExits(now time.Time) {
 			}
 			if desired > pos.StopLoss*(1+0.0015) && desired < price {
 				m.ratchetStopLocked(pos, desired)
+				if m.lock && !pos.Locked && pos.StopLoss >= round2(pos.TargetPrice) {
+					pos.Locked = true // a lock deferred at arm time completed here
+				}
 				// Deliberately NOT persisted per ratchet (that rewrites the whole trades
 				// history every few seconds × every position). On restart, rehydrateProtect
 				// re-places a fresh stop at the last-saved level and the trail re-ratchets from
 				// the current peak — safe, and it removes the write amplification at scale.
 			}
 		}
+		// The ratchet may have discovered the stop already FILLED (position recorded closed)
+		// or ended with no resting stop at all (both replacements failed) — re-read the book.
+		pos = m.open[sym]
+		if pos == nil {
+			m.mu.Unlock()
+			continue
+		}
+		naked := m.live && pos.StopID == ""
 		reason := reasonFor(price, pos)
 		stop := pos.StopLoss
 		m.mu.Unlock()
+
+		// NEVER NAKED: a position whose protective stop could not be (re)placed is flattened
+		// now rather than held unprotected while 422s spin (the old behavior thrashed
+		// CRITICAL for 90s until reconcile noticed the position was gone).
+		if naked {
+			m.executeExit(sym, price, reason)
+			continue
+		}
 
 		// Same-tick backup: if price already sits at/below the (possibly ratcheted) stop and
 		// the exchange hasn't filled it yet, flatten now.
@@ -557,8 +640,13 @@ func reasonFor(price float64, pos *Position) string {
 }
 
 // ratchetStopLocked replaces the exchange protective stop with one at newStop (only ever
-// called to move it UP). Cancels the old stop first, then places the new one; on failure it
-// re-places at the prior level so the position is never left naked. Caller holds mu.
+// called to move it UP). The old stop's cancel is CONFIRMED before the new one is placed:
+// Alpaca cancels are async, and while the old stop rests it holds every share
+// (held_for_orders), so an immediate replacement is rejected "insufficient qty available: 0"
+// — which the old code then misread as "position naked" and nulled a StopID that was still
+// live (double-stop / oversell risk). If the cancel doesn't confirm quickly, the ratchet is
+// simply skipped this cycle — the OLD stop is still resting and protecting, and the trail
+// retries on the next tick. Caller holds mu.
 func (m *Manager) ratchetStopLocked(pos *Position, newStop float64) {
 	newStop = round2(newStop)
 	if !m.live {
@@ -567,6 +655,27 @@ func (m *Manager) ratchetStopLocked(pos *Position, newStop float64) {
 	}
 	if pos.StopID != "" {
 		_ = m.broker.Cancel(pos.StopID)
+		confirmed := false
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if fq, ap, st, err := m.broker.Order(pos.StopID); err == nil {
+				if st == "canceled" || st == "expired" || st == "rejected" || st == "replaced" {
+					confirmed = true
+					break
+				}
+				if st == "filled" && fq > 0 {
+					// The stop fired before the cancel landed — the position is already
+					// closed at the stop's real fill price. Record it; nothing to ratchet.
+					m.recordExitLocked(pos, ap, reasonFor(ap, pos))
+					return
+				}
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if !confirmed {
+			log.Printf("breadcrumbs: %s ratchet deferred — old stop not confirmed canceled (still protecting)", pos.Symbol)
+			return
+		}
 	}
 	sc := fmt.Sprintf("bc_stop_%s_%d", pos.Symbol, time.Now().UnixNano())
 	if sid, err := m.broker.StopSell(pos.Symbol, pos.Qty, newStop, sc); err == nil {
@@ -580,8 +689,10 @@ func (m *Manager) ratchetStopLocked(pos *Position, newStop float64) {
 	if sid, err := m.broker.StopSell(pos.Symbol, pos.Qty, pos.StopLoss, sc2); err == nil {
 		pos.StopID = sid
 	} else {
+		// The old stop is confirmed gone and no replacement would rest → genuinely naked.
+		// Leave StopID empty: manageExits flattens a naked live position on this same pass.
 		pos.StopID = ""
-		log.Printf("breadcrumbs: CRITICAL %s left with NO stop after ratchet failure: %v", pos.Symbol, err)
+		log.Printf("breadcrumbs: CRITICAL %s left with NO stop after ratchet failure (%v) — flattening", pos.Symbol, err)
 	}
 }
 
@@ -624,13 +735,29 @@ func (m *Manager) executeExit(sym string, price float64, reason string) {
 	// Flatten the FULL account quantity, not the book qty — this is the leak-proofing that
 	// closes out any drift (partial fills, adopted orphans) in one shot.
 	qty := pos.Qty
-	if aq, err := m.broker.PositionQty(sym); err == nil && aq > 0 {
+	if aq, err := m.broker.PositionQty(sym); err == nil {
+		if aq <= 0 {
+			// Nothing held: the shares already left the account (a stop fill we missed, or a
+			// manual/external close). Record the exit — selling the book qty here is what
+			// produced the "account is not allowed to short" 403 loop.
+			log.Printf("breadcrumbs: %s no longer held on the account — recording exit, not selling", sym)
+			m.recordExit(sym, price, reason)
+			return
+		}
 		qty = aq
 	}
 	coid := fmt.Sprintf("bc_exit_%s_%d", sym, time.Now().UnixNano())
 	id, err := m.broker.MarketSell(sym, qty, coid)
 	if err != nil {
 		log.Printf("breadcrumbs: %s exit failed (%v) — re-protecting", sym, err)
+		// A resting sell-stop must sit BELOW the market. If price has already fallen to/
+		// through the stop level, re-placing at pos.StopLoss is guaranteed to 422 forever
+		// (the underwater re-protect loop) — skip it and let the next tick retry the
+		// flatten (the price<=stop exit condition persists).
+		if px := m.lastPrice(sym); px > 0 && px <= pos.StopLoss {
+			log.Printf("breadcrumbs: %s market $%.2f at/below stop $%.2f — a resting stop can't be placed; retrying the flatten next tick", sym, px, pos.StopLoss)
+			return
+		}
 		sc := fmt.Sprintf("bc_stop_%s_%d", sym, time.Now().UnixNano())
 		if sid, serr := m.broker.StopSell(sym, qty, pos.StopLoss, sc); serr == nil {
 			m.mu.Lock()
@@ -667,6 +794,7 @@ func (m *Manager) recordExitLocked(pos *Position, price float64, reason string) 
 		PnL: pnl, Reason: reason, OpenedAt: pos.OpenedAt, ClosedAt: time.Now(),
 	})
 	delete(m.open, pos.Symbol)
+	m.cooldown[pos.Symbol] = time.Now() // embargo re-entry while the exit orders settle
 	m.saveStateLocked()
 	log.Printf("breadcrumbs: EXIT %s x%.0f  $%.2f→$%.2f  P&L $%.2f (%s)",
 		pos.Symbol, pos.Qty, pos.EntryPrice, price, pnl, reason)
@@ -772,10 +900,34 @@ func (m *Manager) adoptLocked(sym string, ap quant.BrokerPosition) {
 
 // reprotectLocked (re)places the exchange-side protective stop for a position. It cancels
 // ALL resting orders for the symbol first (not just the tracked StopID) so a stale or
-// orphaned stop from a prior crash/restart can't linger as a second, dangerous order. Caller
-// holds mu.
+// orphaned stop from a prior crash/restart can't linger as a second, dangerous order.
+//
+// If the market has ALREADY fallen to/through the stop level, no resting sell-stop can be
+// placed there (Alpaca 422s a stop at/above market, every single attempt — the old code
+// spun that 422 for 90 seconds straight). The stop's purpose has been reached, so the
+// position is flattened at market instead. Caller holds mu.
 func (m *Manager) reprotectLocked(pos *Position) {
 	_ = m.broker.CancelOpenOrders(pos.Symbol)
+	if px := m.lastPrice(pos.Symbol); px > 0 && px <= pos.StopLoss {
+		log.Printf("breadcrumbs: %s market $%.2f at/below stop $%.2f — flattening instead of re-protecting", pos.Symbol, px, pos.StopLoss)
+		qty := pos.Qty
+		if aq, err := m.broker.PositionQty(pos.Symbol); err == nil {
+			if aq <= 0 {
+				// Already gone from the account — just record it (reconcile would have).
+				m.recordExitLocked(pos, px, "stop_loss")
+				return
+			}
+			qty = aq
+		}
+		coid := fmt.Sprintf("bc_safety_%s_%d", pos.Symbol, time.Now().UnixNano())
+		if _, err := m.broker.MarketSell(pos.Symbol, qty, coid); err == nil {
+			m.recordExitLocked(pos, px, "stop_loss")
+			return
+		}
+		log.Printf("breadcrumbs: %s underwater flatten failed — will retry via exit checks", pos.Symbol)
+		pos.StopID = "" // naked: manageExits flattens on the next pass
+		return
+	}
 	sc := fmt.Sprintf("bc_stop_%s_%d", pos.Symbol, time.Now().UnixNano())
 	if sid, err := m.broker.StopSell(pos.Symbol, pos.Qty, pos.StopLoss, sc); err == nil {
 		pos.StopID = sid
@@ -787,16 +939,49 @@ func (m *Manager) reprotectLocked(pos *Position) {
 
 // ---------------- Helpers / state / report ----------------
 
-func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+// awaitTerminal polls an order until it reaches a TERMINAL state, returning the last-seen
+// filled qty/avg price and whether a terminal state was observed. Unlike the old awaitFill,
+// it does NOT bail on the first partial fill (the rest of a market order usually lands
+// moments later) — grabbing the first partial is how exits under-recorded and entries
+// booked quantities the account never held.
+func (m *Manager) awaitTerminal(id string, max time.Duration) (float64, float64, bool) {
 	deadline := time.Now().Add(max)
+	var fq, ap float64
 	for time.Now().Before(deadline) {
-		fq, ap, status, err := m.broker.Order(id)
-		if err == nil && fq > 0 && (status == "filled" || status == "partially_filled") {
-			return fq, ap
+		q, p, status, err := m.broker.Order(id)
+		if err == nil {
+			if q > 0 {
+				fq, ap = q, p
+			}
+			switch status {
+			case "filled", "canceled", "expired", "rejected", "replaced", "done_for_day":
+				return fq, ap, true
+			}
 		}
-		time.Sleep(700 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return 0, 0
+	return fq, ap, false
+}
+
+// awaitFill keeps the old call sites' shape: filled qty + avg price (zero if nothing filled
+// before the deadline), now waiting for a terminal state rather than the first partial.
+func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+	fq, ap, _ := m.awaitTerminal(id, max)
+	return fq, ap
+}
+
+// settleEntry resolves an entry buy to its FINAL filled quantity. If the order hasn't
+// reached a terminal state by the deadline, the remainder is canceled and the final fill is
+// re-read — so the book records exactly what the account got, never the intended quantity
+// (booking intent on a slow fill is the drift that mis-sized every downstream stop).
+func (m *Manager) settleEntry(id string) (float64, float64) {
+	fq, ap, terminal := m.awaitTerminal(id, 12*time.Second)
+	if terminal {
+		return fq, ap
+	}
+	_ = m.broker.Cancel(id)
+	fq, ap, _ = m.awaitTerminal(id, 4*time.Second)
+	return fq, ap
 }
 
 // Report is the /api/breadcrumbs payload. Budget/exposure are first-class so the page can
@@ -811,10 +996,14 @@ func (m *Manager) Report() interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var realized float64
+	var realized, realizedToday float64
+	day := time.Now().In(m.etz).Format("2006-01-02")
 	wins := 0
 	for _, t := range m.trades {
 		realized += t.PnL
+		if t.ClosedAt.In(m.etz).Format("2006-01-02") == day {
+			realizedToday += t.PnL
+		}
 		if t.PnL > 0 {
 			wins++
 		}
@@ -851,6 +1040,9 @@ func (m *Manager) Report() interface{} {
 		"equity":          equity,
 		"buying_power":    bp,
 		"account_day_pnl": dayPnL, // Alpaca's own day P&L (equity − prior close): broker-level truth
+		"daily_loss_cap":  m.lossCap,
+		"realized_today":  realizedToday,
+		"entries_halted":  m.lossCap > 0 && realizedToday <= -m.lossCap,
 		"realized_pnl":    realized,
 		"unrealized_pnl":  unrealized,
 		"total_trades":    len(m.trades),
