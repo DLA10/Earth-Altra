@@ -15,26 +15,22 @@ from statsmodels.tsa.stattools import coint
 # - MAX_CLUSTER: cap cluster size (was unbounded — connected-components chained 53 of 62
 #   names into one blob, diluting every spread). Oversized components are re-split with a
 #   progressively stricter correlation bar until every family is <= the cap.
+#
+# Universe-breathing dials 2026-07-20 (the desk had ZERO trades ever: only 24 of 99 names
+# landed in a family under coint p<0.05 + min-family-3, giving ~2 signal candidates/day —
+# measured on the desk's own 5y history). New defaults widen the tradable set to ~42 names
+# and ~5 candidates/day; loosening beyond p<0.10 measured NO further gain. A 2-name family
+# is a classic cointegrated pair — requiring 3+ was the non-standard choice. Originals:
+# RBT_COINT_P=0.05, RBT_MIN_FAMILY=3 to roll back.
 Z_ENTRY = float(os.getenv("RBT_Z_ENTRY", "2.0"))
 MAX_CLUSTER = int(os.getenv("RBT_MAX_CLUSTER", "12"))
+COINT_P = float(os.getenv("RBT_COINT_P", "0.10"))
+MIN_FAMILY = max(2, int(os.getenv("RBT_MIN_FAMILY", "2")))
 
-UNIVERSE = [
-    # Semiconductors (20)
-    "ADI", "AMD", "AMAT", "ASML", "AVGO", "INTC", "KLAC", "LRCX", "MCHP", "MPWR", 
-    "MRVL", "MU", "NVDA", "NXPI", "ON", "QCOM", "SMCI", "TSM", "TXN", "ARM",
-    # Energy (20)
-    "COP", "CVX", "EOG", "MPC", "OXY", "PSX", "SLB", "VLO", "WMB", "XOM",
-    "HAL", "BKR", "AR", "DVN", "FANG", "KMI", "OKE", "APA", "LNG", "EQT",
-    # Tech / Software (20)
-    "AAPL", "ACN", "ADBE", "AMZN", "ANET", "CRM", "CSCO", "GOOGL", "IBM", "INTU", 
-    "META", "MSFT", "NFLX", "NOW", "ORCL", "PLTR", "SHOP", "SNOW", "UBER", "DELL",
-    # Financials (20)
-    "JPM", "BAC", "MS", "GS", "C", "WFC", "BK", "SCHW", "COF", "USB",
-    "AXP", "BLK", "MET", "PRU", "PNC", "TFC", "FITB", "KEY", "RF", "HBAN",
-    # Materials / Mining / Industrials (20)
-    "FCX", "NEM", "NUE", "AA", "ALB", "CLF", "STLD", "MLM", "VMC", "APD",
-    "CAT", "DE", "HON", "EMR", "ETN", "GE", "ITW", "PH", "ROK", "PWR"
-]
+# 200 plan (2026-07-20): universe now comes from the shared module (legacy 100 ∪ curated
+# liquid baseline ≈ 210 names) so the trainer, the live scorer, and the Go snapshot fetch
+# can never drift apart.
+from rbt_universe import UNIVERSE
 
 def calculate_garch_volatility(df, train_dates):
     close_prices = df['Close'].reindex(train_dates).ffill().bfill().values
@@ -163,7 +159,7 @@ def main():
                 # continue so the remaining pairs and the model still get built.
                 print(f"  coint skipped {valid_tickers[i]}/{valid_tickers[j]}: {e}")
                 continue
-            if pval < 0.05:
+            if pval < COINT_P:
                 adj[i, j] = 1
                 adj[j, i] = 1
                 
@@ -194,13 +190,13 @@ def main():
     def split_oversized(comp, thr):
         # A blob bigger than MAX_CLUSTER dilutes every spread in it. Re-split it using a
         # stricter correlation bar (keep only edges corr >= thr among cointegrated pairs)
-        # until every family fits; singletons/pairs that fall off simply drop out.
+        # until every family fits; families that shrink below MIN_FAMILY simply drop out.
         if len(comp) <= MAX_CLUSTER or thr > 0.95:
             if len(comp) > MAX_CLUSTER:
                 # >MAX_CLUSTER names all pairwise-correlated >=0.95: splitting further is
                 # arbitrary, so keep the family — but say so instead of silently exceeding the cap.
                 print(f"  cluster cap: keeping {len(comp)}-name family intact (all corr >= 0.95)")
-            return [comp] if len(comp) >= 3 else []
+            return [comp] if len(comp) >= MIN_FAMILY else []
         sub_adj = np.zeros_like(adj)
         for a in comp:
             for b in comp:
@@ -209,13 +205,13 @@ def main():
                     sub_adj[b, a] = 1
         out = []
         for sub in components_of(sub_adj, comp):
-            if len(sub) >= 3:
+            if len(sub) >= MIN_FAMILY:
                 out.extend(split_oversized(sub, thr + 0.05))
         return out
 
     consensus_clusters = []
     for comp in components_of(adj, list(range(N))):
-        if len(comp) < 3:
+        if len(comp) < MIN_FAMILY:
             continue
         for c in split_oversized(comp, 0.5):
             consensus_clusters.append(c)

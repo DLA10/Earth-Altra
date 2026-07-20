@@ -8,10 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -656,8 +658,57 @@ func main() {
 			etzRbt = time.UTC
 		}
 		rbtBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperRbtKey, cfg.PaperRbtSecret)
-		rbtMgr := rbt.New(rbtBroker, engine, etzRbt, "data", true)
+		// 200 plan (2026-07-20): scan universe = curated liquid baseline (~160, the
+		// pre-throughput-expansion QUANT_UNIVERSE snapshot — liquid + shortable, which the
+		// full 534-name file is not) ∪ the legacy RBT 100. Priced via one REST snapshot at
+		// scan time, so universe size adds nothing to the SIP stream.
+		rbtUni := rbt.RbtUniverse
+		if bu, err := signals.LoadUniverse(os.Getenv("RBT_UNIVERSE_PATH"),
+			"../QUANT_UNIVERSE.baseline-2026-07-16.json", "QUANT_UNIVERSE.baseline-2026-07-16.json"); err == nil {
+			set := map[string]bool{}
+			for _, s := range rbtUni {
+				set[s] = true
+			}
+			for _, s := range bu.Symbols() {
+				set[s] = true
+			}
+			rbtUni = make([]string, 0, len(set))
+			for s := range set {
+				rbtUni = append(rbtUni, s)
+			}
+			sort.Strings(rbtUni)
+		} else {
+			log.Printf("rbt: baseline universe file not found (%v) — legacy %d-name universe", err, len(rbtUni))
+		}
+		rbtMgr := rbt.New(rbtBroker, engine, etzRbt, "data", true, rbtUni)
 		rbtMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		rbtMgr.SetDaySnapFn(func(syms []string) (map[string]rbt.DaySnap, error) {
+			nowET := time.Now().In(etzRbt)
+			open := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, etzRbt)
+			bars, err := client.GetMultiIntradayBars(syms, open, time.Now())
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string]rbt.DaySnap, len(bars))
+			for sym, bl := range bars {
+				if len(bl) == 0 {
+					continue
+				}
+				s := rbt.DaySnap{High: -math.MaxFloat64, Low: math.MaxFloat64}
+				for _, b := range bl {
+					s.Close = b.Close
+					if b.High > s.High {
+						s.High = b.High
+					}
+					if b.Low < s.Low {
+						s.Low = b.Low
+					}
+					s.Volume += b.Volume
+				}
+				out[sym] = s
+			}
+			return out, nil
+		})
 		rbtMgr.Start(ctx)
 		srv.Rbt = func() interface{} { return rbtMgr.Report() }
 		log.Printf("rbt: initialized and running on paper account")

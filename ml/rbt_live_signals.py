@@ -10,24 +10,10 @@ import joblib
 # to roll back. Must stay in sync with the label threshold in rbt_train.py (same env var).
 Z_ENTRY = float(os.getenv("RBT_Z_ENTRY", "2.0"))
 
-# Universe list
-UNIVERSE = [
-    # Semiconductors (20)
-    "ADI", "AMD", "AMAT", "ASML", "AVGO", "INTC", "KLAC", "LRCX", "MCHP", "MPWR", 
-    "MRVL", "MU", "NVDA", "NXPI", "ON", "QCOM", "SMCI", "TSM", "TXN", "ARM",
-    # Energy (20)
-    "COP", "CVX", "EOG", "MPC", "OXY", "PSX", "SLB", "VLO", "WMB", "XOM",
-    "HAL", "BKR", "AR", "DVN", "FANG", "KMI", "OKE", "APA", "LNG", "EQT",
-    # Tech / Software (20)
-    "AAPL", "ACN", "ADBE", "AMZN", "ANET", "CRM", "CSCO", "GOOGL", "IBM", "INTU", 
-    "META", "MSFT", "NFLX", "NOW", "ORCL", "PLTR", "SHOP", "SNOW", "UBER", "DELL",
-    # Financials (20)
-    "JPM", "BAC", "MS", "GS", "C", "WFC", "BK", "SCHW", "COF", "USB",
-    "AXP", "BLK", "MET", "PRU", "PNC", "TFC", "FITB", "KEY", "RF", "HBAN",
-    # Materials / Mining / Industrials (20)
-    "FCX", "NEM", "NUE", "AA", "ALB", "CLF", "STLD", "MLM", "VMC", "APD",
-    "CAT", "DE", "HON", "EMR", "ETN", "GE", "ITW", "PH", "ROK", "PWR"
-]
+# Universe: shared module (legacy 100 ∪ curated liquid baseline ≈ 210 names — 200 plan
+# 2026-07-20). Keeps trainer/scorer/Go in lockstep; scorer still narrows to whatever
+# columns exist in history_closes.csv below, so a not-yet-retrained cache stays safe.
+from rbt_universe import UNIVERSE
 
 def main():
     parser = argparse.ArgumentParser(description="Live Fast RBT Scoring Engine")

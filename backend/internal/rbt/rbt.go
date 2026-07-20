@@ -70,6 +70,17 @@ type Trade struct {
 	ClosedAt   time.Time `json:"closed_at"`
 }
 
+// DaySnap is one symbol's session-so-far OHLCV aggregate, fetched via REST at scan time.
+// The 200-plan design: the desk scans once a day (15:50 ET), so the scan universe does NOT
+// need all-day trade/quote streaming — a REST snapshot decouples universe size from the
+// load on the single SIP connection the live Execution page depends on.
+type DaySnap struct {
+	Close  float64
+	High   float64
+	Low    float64
+	Volume float64
+}
+
 // Manager runs the entire RBT (Rubber Band Trading) paper-trading desk.
 type Manager struct {
 	mu         sync.RWMutex
@@ -78,12 +89,14 @@ type Manager struct {
 	etz        *time.Location
 	dataDir    string
 	live       bool
+	universe   []string // scan universe (200 plan: curated liquid set ∪ legacy 100)
 	open       map[string]*Position
 	trades     []Trade
 	dayKey     string
 	entryRun   bool
 	ageRun     bool
 	ensureLive func(string)
+	daySnap    func([]string) (map[string]DaySnap, error) // REST session-OHLCV fetch (nil = engine fallback)
 }
 
 type pythonSignal struct {
@@ -96,19 +109,23 @@ type pythonSignal struct {
 	StopLoss    float64 `json:"stop_loss"`
 }
 
-// New builds an RBT Manager.
-func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataDir string, live bool) *Manager {
+// New builds an RBT Manager. universe is the scan set (empty = the legacy RbtUniverse).
+func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataDir string, live bool, universe []string) *Manager {
 	if etz == nil {
 		etz = time.UTC
 	}
+	if len(universe) == 0 {
+		universe = RbtUniverse
+	}
 	m := &Manager{
-		broker:  broker,
-		engine:  engine,
-		etz:     etz,
-		dataDir: filepath.Join(dataDir, "rbt"),
-		live:    live,
-		open:    map[string]*Position{},
-		trades:  []Trade{},
+		broker:   broker,
+		engine:   engine,
+		etz:      etz,
+		dataDir:  filepath.Join(dataDir, "rbt"),
+		live:     live,
+		universe: universe,
+		open:     map[string]*Position{},
+		trades:   []Trade{},
 	}
 	_ = os.MkdirAll(m.dataDir, 0755)
 	m.loadState()
@@ -118,6 +135,11 @@ func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataD
 // SetEnsureLive registers the symbol streaming activation callback.
 func (m *Manager) SetEnsureLive(fn func(string)) {
 	m.ensureLive = fn
+}
+
+// SetDaySnapFn registers the REST session-OHLCV fetcher used at scan time.
+func (m *Manager) SetDaySnapFn(fn func([]string) (map[string]DaySnap, error)) {
+	m.daySnap = fn
 }
 
 // Enabled returns true if RBT has paper broker keys.
@@ -132,12 +154,21 @@ func (m *Manager) Start(ctx context.Context) {
 		return
 	}
 
-	// 1. Subscribe to RBT universe quotes/candles to enable streaming price updates
+	// 1. Stream only HELD positions (exit monitoring marks to live 1-min candles). The scan
+	// universe itself is priced by a REST snapshot at 15:50 (SetDaySnapFn), so widening the
+	// universe adds zero load to the single SIP stream the Execution page depends on.
 	if m.ensureLive != nil {
-		for _, sym := range RbtUniverse {
+		m.mu.RLock()
+		held := make([]string, 0, len(m.open))
+		for sym := range m.open {
+			held = append(held, sym)
+		}
+		m.mu.RUnlock()
+		for _, sym := range held {
 			m.ensureLive(sym)
 		}
-		log.Printf("rbt: subscribed to %d universe symbols", len(RbtUniverse))
+		log.Printf("rbt: streaming %d held position(s); scan universe %d symbols priced via REST at scan time",
+			len(held), len(m.universe))
 	}
 
 	// 2. Launch nightly retraining scheduler
@@ -441,7 +472,23 @@ func (m *Manager) runEntryScan(now time.Time) {
 		marketOpenUnix := marketOpenTime.Unix()
 
 		livePrices := make(map[string]map[string]float64)
-		for _, sym := range RbtUniverse {
+		// Primary: one REST multi-symbol fetch of today's session bars (works for ANY
+		// universe size, no streaming needed). Fallback per symbol: the candle engine
+		// (held names stream; anything else the engine happens to track).
+		var snaps map[string]DaySnap
+		if m.daySnap != nil {
+			var serr error
+			if snaps, serr = m.daySnap(m.universe); serr != nil {
+				log.Printf("rbt: REST session snapshot failed (%v) — engine fallback only", serr)
+			}
+		}
+		for _, sym := range m.universe {
+			if s, ok := snaps[sym]; ok && s.Close > 0 {
+				livePrices[sym] = map[string]float64{
+					"close": s.Close, "high": s.High, "low": s.Low, "volume": s.Volume,
+				}
+				continue
+			}
 			bars := m.engine.Snapshot(sym, 1)
 			if len(bars) > 0 {
 				todayClose := 0.0
@@ -670,6 +717,12 @@ func (m *Manager) runEntryScan(now time.Time) {
 			m.open[sig.Ticker] = newPos
 			m.mu.Unlock()
 
+			// The scan universe no longer streams (200 plan) — start streaming THIS name
+			// now so exit monitoring can mark it to live 1-min candles until it closes.
+			if m.ensureLive != nil {
+				m.ensureLive(sig.Ticker)
+			}
+
 			slotsLeft--
 			log.Printf("rbt: ENTRY COMPLETE for %s @ $%.2f (TP: $%.2f, Strategy SL: $%.2f, Rested StopID: %s)",
 				sig.Ticker, entryPrice, sig.Target, sig.StopLoss, stopID)
@@ -717,7 +770,9 @@ func (m *Manager) runNightlyRetrain(ctx context.Context) {
 		pyPath := filepath.Join("..", "ml", ".venv", "Scripts", "python.exe")
 		trainScript := filepath.Join("..", "ml", "rbt_train.py")
 
-		cctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		// 45 min: the 200-plan universe (~210 names) roughly quadruples the pairwise
+		// cointegration sweep vs the old 100 — 15 min killed it mid-run.
+		cctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 		defer cancel()
 
 		cmd := exec.CommandContext(cctx, pyPath, trainScript, "--outdir", m.dataDir)
