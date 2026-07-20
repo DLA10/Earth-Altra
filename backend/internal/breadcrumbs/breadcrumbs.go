@@ -52,9 +52,15 @@ type Position struct {
 	Locked      bool      `json:"locked"`       // profit locked: exchange stop moved up to (≥) the target
 	Adopted     bool      `json:"adopted"`      // recovered via reconcile (no original context)
 	Prob        float64   `json:"prob"`         // model probability at entry (for the report)
+	SignalPx    float64   `json:"signal_px"`    // scorer close the model rated (slippage baseline)
+	EntrySlip   float64   `json:"entry_slip_bps"` // fill vs signal close, bps (+ = paid up)
+	HighPx      float64   `json:"high_px"`      // highest mark seen while held (MFE watermark)
+	LowPx       float64   `json:"low_px"`       // lowest mark seen while held (MAE watermark)
 }
 
-// Trade is a closed round-trip.
+// Trade is a closed round-trip. The attribution fields (prob/signal/slip/watermarks) exist
+// so every loss arrives pre-labeled for analysis — "was it the model or the fill?" must be
+// answerable per trade without reconstructing bars (2026-07-20 post-mortem lesson).
 type Trade struct {
 	Symbol     string    `json:"symbol"`
 	Qty        float64   `json:"qty"`
@@ -64,6 +70,11 @@ type Trade struct {
 	Reason     string    `json:"reason"` // target/trail/stop_loss/catastrophic_stop/eod/reconcile_vanished/safety_exit
 	OpenedAt   time.Time `json:"opened_at"`
 	ClosedAt   time.Time `json:"closed_at"`
+	Prob       float64   `json:"prob,omitempty"`           // model probability at entry (0 = adopted/unknown)
+	SignalPx   float64   `json:"signal_px,omitempty"`      // scorer close the model rated
+	EntrySlip  float64   `json:"entry_slip_bps,omitempty"` // entry fill vs signal close, bps
+	HighPx     float64   `json:"high_px,omitempty"`        // highest mark while held (MFE)
+	LowPx      float64   `json:"low_px,omitempty"`         // lowest mark while held (MAE)
 }
 
 // Manager is the desk. All position/trade state is guarded by mu.
@@ -91,6 +102,8 @@ type Manager struct {
 	open       map[string]*Position
 	pending    map[string]float64   // symbol → reserved notional for an in-flight entry (not yet in open)
 	cooldown   map[string]time.Time // symbol → last exit time (post-exit re-entry embargo)
+	stopOuts   map[string]int       // symbol → losing stop-outs today (bench at benchStopOuts)
+	stopDay    string               // ET day stopOuts counts (rolls daily)
 	trades     []Trade
 	scanning   bool   // guards against overlapping entry scans
 	lastScan   int    // last entry-scan minute (dedupe per-minute boundary)
@@ -109,11 +122,20 @@ type sig struct {
 	Close       float64 `json:"close"`
 }
 
-// reentryCooldown blocks a fresh entry into a symbol we just exited: the exit sell (and its
-// canceled stop) settle asynchronously on Alpaca, and a new buy while an opposite-side order
-// is still live is rejected as a "potential wash trade" — which then kills the new position's
-// protective stop and forces a safety flatten. 90s ≈ one-to-two scan cycles.
-const reentryCooldown = 90 * time.Second
+// reentryCooldown blocks a fresh entry into a symbol we just exited. Two reasons:
+// (1) order hygiene — the exit sell / canceled stop settle asynchronously on Alpaca, and a
+// new buy while an opposite-side order is live is rejected as a "potential wash trade";
+// (2) the post-stop dead-cat bounce — on 2026-07-20, five minutes after a stop-out price
+// was back above the exit 52% of the time and then FADED (36% above at 30m), so a short
+// cooldown re-buys the top of the bounce. 5 min clears it; walk-forward (Jul 6–20, with
+// the bench rule) turned −$2,409 into +$758 @2bp/side.
+const reentryCooldown = 5 * time.Minute
+
+// benchStopOuts benches a symbol for the rest of the day after this many LOSING stop-outs:
+// post-loss futures show the name usually keeps falling (79% fell another ≥0.5% within 30m
+// on 2026-07-20), so the 3rd..Nth re-entry re-buys the same falling knife (ARM: 20 trades,
+// −$337 in one session). Validated in the same walk-forward as the cooldown.
+const benchStopOuts = 2
 
 // New builds the desk. universe/budget/etc come from config; sensible validated defaults are
 // applied for any zero value so a partial .env can't silently disable the guards.
@@ -154,6 +176,7 @@ func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataD
 		open:     map[string]*Position{},
 		pending:  map[string]float64{},
 		cooldown: map[string]time.Time{},
+		stopOuts: map[string]int{},
 		trades:   []Trade{},
 		lastScan: -1,
 	}
@@ -356,11 +379,20 @@ func (m *Manager) runEntryScan() {
 	if full {
 		return // no free slot → don't even score
 	}
+	// Score COMPLETED bars only: the scan fires seconds after the minute boundary, so the
+	// engine's last bar is a seconds-old stub (partial volume/range) the model was never
+	// trained on. Scoring it fired phantom entries (2026-07-20: ~2/3 of comparable live
+	// entries were not signals on the completed bar — some at true prob 0.37 vs the 0.65
+	// gate). Cut every bar of the still-forming minute before scoring.
+	cut := time.Now().Truncate(time.Minute).Unix()
 	for _, s := range m.universe {
 		if held[s] {
 			continue
 		}
 		bars := m.engine.Snapshot(s, 1)
+		for len(bars) > 0 && bars[len(bars)-1].Time >= cut {
+			bars = bars[:len(bars)-1]
+		}
 		if len(bars) < 100 {
 			continue
 		}
@@ -431,11 +463,18 @@ func (m *Manager) tryEnter(sym string, sigClose, prob float64) {
 		return
 	}
 	// Post-exit embargo: re-buying a name whose exit sell/stop-cancel is still settling gets
-	// the new position's protective stop rejected as a wash trade (then a forced flatten).
+	// the new position's protective stop rejected as a wash trade (then a forced flatten) —
+	// and the first ~5 minutes after a stop-out are a dead-cat bounce that fades.
 	if t, ok := m.cooldown[sym]; ok && time.Since(t) < reentryCooldown {
 		m.mu.Unlock()
 		log.Printf("breadcrumbs: %s skipped — exited %.0fs ago (re-entry cooldown %ds)",
 			sym, time.Since(t).Seconds(), int(reentryCooldown.Seconds()))
+		return
+	}
+	// Bench rule: after benchStopOuts losing stop-outs, the name sits out the rest of the
+	// day — post-loss futures show it usually keeps falling; re-entering re-buys the knife.
+	if m.stopDay == time.Now().In(m.etz).Format("2006-01-02") && m.stopOuts[sym] >= benchStopOuts {
+		m.mu.Unlock()
 		return
 	}
 	// Slots + budget count BOTH open positions and in-flight (pending) entries so concurrent
@@ -514,10 +553,15 @@ func (m *Manager) tryEnter(sym string, sigClose, prob float64) {
 		return
 	}
 
+	slip := 0.0
+	if sigClose > 0 {
+		slip = (price/sigClose - 1) * 1e4
+	}
 	m.mu.Lock()
 	m.open[sym] = &Position{
 		Symbol: sym, Qty: qty, EntryPrice: price, OpenedAt: time.Now(),
 		TargetPrice: tp, StopLoss: sl, StopID: stopID, Peak: price, Prob: prob,
+		SignalPx: sigClose, EntrySlip: slip, HighPx: price, LowPx: price,
 	}
 	m.saveStateLocked()
 	m.mu.Unlock()
@@ -556,6 +600,15 @@ func (m *Manager) manageExits(now time.Time) {
 		if pos == nil {
 			m.mu.Unlock()
 			continue
+		}
+		// MFE/MAE watermarks (attribution data): track the best and worst mark seen while
+		// held, for every position — Peak below only tracks after arming. Zero guards keep
+		// rehydrated pre-upgrade positions sane.
+		if price > pos.HighPx {
+			pos.HighPx = price
+		}
+		if pos.LowPx == 0 || price < pos.LowPx {
+			pos.LowPx = price
 		}
 		// (2) Arm + LOCK: first time price tags the target, move the exchange stop up to the
 		// target so the profit can't be given back below it, then the trail takes over.
@@ -789,12 +842,32 @@ func (m *Manager) recordExit(sym string, price float64, reason string) {
 
 func (m *Manager) recordExitLocked(pos *Position, price float64, reason string) {
 	pnl := (price - pos.EntryPrice) * pos.Qty
+	hi, lo := pos.HighPx, pos.LowPx
+	if price > hi {
+		hi = price
+	}
+	if lo == 0 || price < lo {
+		lo = price
+	}
 	m.trades = append(m.trades, Trade{
 		Symbol: pos.Symbol, Qty: pos.Qty, EntryPrice: pos.EntryPrice, ExitPrice: price,
 		PnL: pnl, Reason: reason, OpenedAt: pos.OpenedAt, ClosedAt: time.Now(),
+		Prob: pos.Prob, SignalPx: pos.SignalPx, EntrySlip: pos.EntrySlip, HighPx: hi, LowPx: lo,
 	})
 	delete(m.open, pos.Symbol)
 	m.cooldown[pos.Symbol] = time.Now() // embargo re-entry while the exit orders settle
+	// Count losing stop-outs per symbol per ET day for the bench rule.
+	if pnl <= 0 && (reason == "stop_loss" || reason == "catastrophic_stop") {
+		day := time.Now().In(m.etz).Format("2006-01-02")
+		if m.stopDay != day {
+			m.stopDay = day
+			m.stopOuts = map[string]int{}
+		}
+		m.stopOuts[pos.Symbol]++
+		if m.stopOuts[pos.Symbol] == benchStopOuts {
+			log.Printf("breadcrumbs: %s BENCHED for the day (%d losing stop-outs)", pos.Symbol, benchStopOuts)
+		}
+	}
 	m.saveStateLocked()
 	log.Printf("breadcrumbs: EXIT %s x%.0f  $%.2f→$%.2f  P&L $%.2f (%s)",
 		pos.Symbol, pos.Qty, pos.EntryPrice, price, pnl, reason)
@@ -892,7 +965,7 @@ func (m *Manager) adoptLocked(sym string, ap quant.BrokerPosition) {
 	pos := &Position{
 		Symbol: sym, Qty: ap.Qty, EntryPrice: ap.AvgEntry, OpenedAt: time.Now(),
 		TargetPrice: ap.AvgEntry * (1 + m.tpPct), StopLoss: ap.AvgEntry * (1 - m.slPct),
-		Peak: ap.AvgEntry, Adopted: true,
+		Peak: ap.AvgEntry, Adopted: true, HighPx: ap.AvgEntry, LowPx: ap.AvgEntry,
 	}
 	m.open[sym] = pos
 	m.reprotectLocked(pos)
@@ -1013,6 +1086,16 @@ func (m *Manager) Report() interface{} {
 		winRate = float64(wins) / float64(len(m.trades)) * 100
 	}
 
+	benched := []string{}
+	if m.stopDay == day {
+		for s, n := range m.stopOuts {
+			if n >= benchStopOuts {
+				benched = append(benched, s)
+			}
+		}
+		sort.Strings(benched)
+	}
+
 	deployed := 0.0
 	var unrealized float64
 	positions := make([]Position, 0, len(m.open))
@@ -1043,6 +1126,7 @@ func (m *Manager) Report() interface{} {
 		"daily_loss_cap":  m.lossCap,
 		"realized_today":  realizedToday,
 		"entries_halted":  m.lossCap > 0 && realizedToday <= -m.lossCap,
+		"benched":         benched, // symbols sitting out today (>=2 losing stop-outs)
 		"realized_pnl":    realized,
 		"unrealized_pnl":  unrealized,
 		"total_trades":    len(m.trades),
