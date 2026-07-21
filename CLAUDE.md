@@ -529,7 +529,10 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   data collection), per-trade attribution (`prob`, `signal_px`, `entry_slip_bps`,
   MFE/MAE watermarks). Walk-forward Jul 6–20: the dials turn −$2,409 into +$758
   @2bp/side, but the raw edge is regime-compressed — treat as a measurement desk, not an
-  earner. A 5-min time exit was tested the same way and REJECTED.
+  earner. A 5-min time exit was tested the same way and REJECTED. A 16-idea small-bracket
+  reversion program (HARVEST study 2026-07-21) found NO deployable edge in this family —
+  62% WR on July dev collapsed to 46–50% on Jun/May walk-backs; see HARVEST_STUDY.md
+  before proposing new small-profit scalpers.
 - **RBT** (`internal/rbt`): daily-bar pairs/spread mean reversion. Universe = **199
   liquid names** (legacy 100 ∪ curated baseline; single source `ml/rbt_universe.py`,
   mirrored in `main.go`; deliberately NOT the 534-name throughput file — the desk shorts,

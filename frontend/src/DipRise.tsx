@@ -293,9 +293,10 @@ function SurgerSection({ rep }: { rep: SurgerReport | null }) {
   if (!rep || !rep.enabled || !rep.variants) return null;
   const money = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`;
   const cls = (v: number) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
-  const allOpen = rep.variants.flatMap((v) => v.open.map((p) => ({ ...p, vname: v.name })));
+  // Go marshals nil slices as null — every per-variant list needs a guard
+  const allOpen = rep.variants.flatMap((v) => (v.open ?? []).map((p) => ({ ...p, vname: v.name })));
   const allTrades = rep.variants
-    .flatMap((v) => v.trades.map((t) => ({ ...t, vname: v.name })))
+    .flatMap((v) => (v.trades ?? []).map((t) => ({ ...t, vname: v.name })))
     .sort((a, b) => (a.closed_at < b.closed_at ? 1 : -1))
     .slice(0, 25);
   return (
@@ -320,7 +321,7 @@ function SurgerSection({ rep }: { rep: SurgerReport | null }) {
           <Card
             key={v.name + "_wr"}
             label={`${v.name} — WR · trades · open`}
-            value={`${v.total_trades > 0 ? v.win_rate.toFixed(0) + "%" : "—"} · ${v.total_trades} · ${v.open.length}`}
+            value={`${v.total_trades > 0 ? v.win_rate.toFixed(0) + "%" : "—"} · ${v.total_trades} · ${(v.open ?? []).length}`}
           />
         ))}
       </div>

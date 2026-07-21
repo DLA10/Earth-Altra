@@ -917,6 +917,9 @@ func (m *Manager) Report() interface{} {
 		if len(trades) > 40 {
 			trades = trades[len(trades)-40:]
 		}
+		if trades == nil {
+			trades = []Trade{} // nil marshals to JSON null and crashes .map() in the UI
+		}
 		variants = append(variants, map[string]interface{}{
 			"name":           VariantNames[vi],
 			"coid_prefix":    VariantCoid[vi] + "_",
