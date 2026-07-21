@@ -250,6 +250,29 @@ func (b *Broker) Order(id string) (filledQty, avgPrice float64, status string, e
 	return fq, ap, o.Status, nil
 }
 
+// OrderByCoid resolves an order by its client_order_id — used to settle in-flight orders
+// whose server id was never learned (a crash between the POST and its response). Returns
+// id=="" with nil error when no such order exists (the POST never reached Alpaca).
+func (b *Broker) OrderByCoid(coid string) (id string, filledQty, avgPrice float64, status string, err error) {
+	rb, code, err := b.do(http.MethodGet, "/orders:by_client_order_id?client_order_id="+url.QueryEscape(coid), nil)
+	if err != nil {
+		return "", 0, 0, "", err
+	}
+	if code == http.StatusNotFound {
+		return "", 0, 0, "", nil
+	}
+	if code != http.StatusOK {
+		return "", 0, 0, "", fmt.Errorf("order by coid (%d): %s", code, strings.TrimSpace(string(rb)))
+	}
+	var o paperOrd
+	if err := json.Unmarshal(rb, &o); err != nil {
+		return "", 0, 0, "", err
+	}
+	fq, _ := strconv.ParseFloat(o.FilledQty, 64)
+	ap, _ := strconv.ParseFloat(o.FilledAvgPrice, 64)
+	return o.ID, fq, ap, o.Status, nil
+}
+
 // PositionQty returns how many shares of sym the paper account currently holds (0 if none).
 func (b *Broker) PositionQty(sym string) (float64, error) {
 	rb, code, err := b.do(http.MethodGet, "/positions/"+sym, nil)

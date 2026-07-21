@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,7 @@ type Position struct {
 	EntrySlip  float64   `json:"entry_slip_bps"`  // fill vs signal close
 	HighPx     float64   `json:"high_px"`
 	LowPx      float64   `json:"low_px"`
+	exiting    bool      // an exit is in flight — blocks concurrent exits AND ratchets
 }
 
 // Trade is a closed round-trip, pre-labeled for analysis.
@@ -107,6 +109,7 @@ type Manager struct {
 	books    [NumVariants]*book
 	pending  map[string]int      // symbol -> variant currently entering (exclusivity)
 	inflight map[string]inflight // coid -> order awaiting settlement (persisted)
+	tickN    int                 // upkeep tick counter (staggers stop polling)
 }
 
 func New(broker *quant.Broker, etz *time.Location, dataDir string, live bool,
@@ -174,6 +177,12 @@ func (m *Manager) OnBar(sym string, ts time.Time, o, h, l, c, v float64) {
 	}
 	day := ts.In(m.etz).Format("2006-01-02")
 	minute := etMinute(ts, m.etz)
+	// RTH ONLY — the validation harness computed every feature window on regular-hours
+	// bars. Letting pre/after-market bars into the series would shift every rolling
+	// window (a train/serve-skew of exactly the kind that broke breadcrumbs).
+	if minute < 9*60+30 || minute > 15*60+59 {
+		return
+	}
 
 	m.mu.Lock()
 	sr := m.series[sym]
@@ -189,9 +198,10 @@ func (m *Manager) OnBar(sym string, ts time.Time, o, h, l, c, v float64) {
 		}
 	}
 	var fire [NumVariants]bool
+	var why string
 	tradable := minute >= entryFromMin && minute <= entryToMin
 	if tradable {
-		fire = sr.signals()
+		fire, why = sr.signals()
 	}
 	m.mu.Unlock()
 
@@ -199,12 +209,15 @@ func (m *Manager) OnBar(sym string, ts time.Time, o, h, l, c, v float64) {
 		return
 	}
 	for vi := 0; vi < NumVariants; vi++ { // priority order C2 > C1 > SPECTRAL
-		if fire[vi] {
-			if m.tryReserve(vi, sym) {
-				go m.enter(vi, sym, c)
-			}
-			break // exclusivity: first variant to fire owns the symbol
+		if !fire[vi] {
+			continue
 		}
+		m.journal(vi, "signal", sym, why) // every fire is journaled with its numbers
+		if m.tryReserve(vi, sym) {
+			go m.enter(vi, sym, c)
+			break // exclusivity: this variant owns the symbol now
+		}
+		// reserve failed (cooldown/slots/held) — let the next firing variant try
 	}
 }
 
@@ -254,7 +267,9 @@ func (m *Manager) enter(vi int, sym string, signalPx float64) {
 	}
 	// SHARED-ACCOUNT exclusivity: never touch a symbol anything else on this account holds.
 	if aq, err := m.broker.PositionQty(sym); err != nil || aq != 0 {
-		if err == nil {
+		if err != nil {
+			m.journal(vi, "skip", sym, "exclusivity check unreadable ("+err.Error()+") — skipping to stay safe")
+		} else {
 			m.journal(vi, "skip", sym, fmt.Sprintf("account already holds %.0f (dip+rise or sibling) — exclusivity skip", aq))
 		}
 		return
@@ -293,22 +308,38 @@ func (m *Manager) enter(vi int, sym string, signalPx float64) {
 	sc := fmt.Sprintf("%s_%s_stop_%d", VariantCoid[vi], sym, time.Now().UnixNano())
 	stopID, sErr := m.broker.StopSell(sym, fq, stopPx, sc)
 	if sErr != nil {
-		// never naked: flatten what we just bought
+		// never naked: flatten what we just bought. Record a closed trade ONLY for the
+		// quantity the sell CONFIRMED — booking an unconfirmed sell as closed is exactly
+		// how ghost shares are born. Any unconfirmed remainder stays in the book as a
+		// (naked) position; the upkeep tick flattens/protects it until it's truly gone.
 		m.journal(vi, "error", sym, "protective stop failed ("+sErr.Error()+") — flattening for safety")
+		var xq, xp float64
 		fc := fmt.Sprintf("%s_%s_exit_%d", VariantCoid[vi], sym, time.Now().UnixNano())
+		m.addInflight(inflight{Variant: vi, Symbol: sym, Coid: fc, Kind: "exit", Qty: fq, At: time.Now()})
 		if xid, xerr := m.broker.MarketSell(sym, fq, fc); xerr == nil {
-			xq, xp := m.settleOrder(xid, 12*time.Second, false)
-			_ = xq
-			m.mu.Lock()
+			m.setInflightID(fc, xid)
+			xq, xp = m.settleOrder(xid, 15*time.Second, false)
+		}
+		m.dropInflight(fc)
+		m.mu.Lock()
+		if xq >= 1 {
 			m.books[vi].Trades = append(m.books[vi].Trades, Trade{
-				Variant: vi, Symbol: sym, Qty: fq, EntryPrice: price,
-				ExitPrice: pick(xp, price), PnL: (pick(xp, price) - price) * fq,
+				Variant: vi, Symbol: sym, Qty: xq, EntryPrice: price,
+				ExitPrice: pick(xp, price), PnL: (pick(xp, price) - price) * xq,
 				Reason: "safety_exit", OpenedAt: time.Now(), ClosedAt: time.Now(),
 			})
-			m.books[vi].cooldown[sym] = time.Now()
-			m.saveStateLocked()
-			m.mu.Unlock()
 		}
+		if rem := fq - xq; rem >= 1 {
+			m.books[vi].Open[sym] = &Position{ // naked remainder — tick retries the flatten
+				Variant: vi, Symbol: sym, Qty: rem, EntryPrice: price, OpenedAt: time.Now(),
+				Peak: price, StopPx: round2(price * (1 - trailWide)),
+				SignalPx: signalPx, HighPx: price, LowPx: price,
+			}
+			m.journalLocked(vi, "warn", sym, fmt.Sprintf("safety flatten confirmed %.0f/%.0f — tracking naked remainder %.0f", xq, fq, rem))
+		}
+		m.books[vi].cooldown[sym] = time.Now()
+		m.saveStateLocked()
+		m.mu.Unlock()
 		return
 	}
 
@@ -356,7 +387,7 @@ func (m *Manager) manageBarLocked(vi int, p *Position, close, high, low float64)
 func (m *Manager) ratchet(vi int, sym string, newStop float64) {
 	m.mu.Lock()
 	p := m.books[vi].Open[sym]
-	if p == nil || newStop <= p.StopPx*ratchetMinUp {
+	if p == nil || p.exiting || newStop <= p.StopPx*ratchetMinUp {
 		m.mu.Unlock()
 		return
 	}
@@ -393,26 +424,44 @@ func (m *Manager) ratchet(vi int, sym string, newStop float64) {
 
 func (m *Manager) setStop(vi int, sym, sid string, px float64) {
 	m.mu.Lock()
-	if p := m.books[vi].Open[sym]; p != nil {
+	p := m.books[vi].Open[sym]
+	if p != nil {
 		p.StopID = sid
 		p.StopPx = px
 	}
 	m.saveStateLocked()
 	m.mu.Unlock()
+	// The position closed while this stop was being placed (exit/ratchet race on a
+	// shared account) — an untracked resting sell-stop could later fire into a SHORT.
+	// Kill it immediately.
+	if p == nil && sid != "" {
+		_ = m.broker.Cancel(sid)
+	}
 }
 
 // ---------------- exit ----------------
 
 // executeExit: confirm-cancel our stop, market-sell exactly OUR quantity, settle terminal.
+// The exiting flag makes it single-flight per position: a second concurrent call (bar
+// backup + tick EOD, say) would otherwise cancel-confirm the same stop twice and sell
+// the shares TWICE — an instant short on a shared account.
 func (m *Manager) executeExit(vi int, sym, reason string) {
 	m.mu.Lock()
 	p := m.books[vi].Open[sym]
-	if p == nil {
+	if p == nil || p.exiting {
 		m.mu.Unlock()
 		return
 	}
+	p.exiting = true
 	stopID, qty := p.StopID, p.Qty
 	m.mu.Unlock()
+	defer func() { // clear the flag if the position still exists (deferred/failed exits retry)
+		m.mu.Lock()
+		if p2 := m.books[vi].Open[sym]; p2 != nil {
+			p2.exiting = false
+		}
+		m.mu.Unlock()
+	}()
 
 	if stopID != "" {
 		_ = m.broker.Cancel(stopID)
@@ -540,6 +589,9 @@ func (m *Manager) tick() {
 		stopID string
 	}
 	m.mu.Lock()
+	m.tickN++
+	pollStops := m.tickN%3 == 0 // 15s stop-status cadence: the account's API budget is
+	// SHARED with the whole dip+rise desk — 5s polling across 15 positions would eat it
 	var checks []check
 	for vi := range m.books {
 		for sym, p := range m.books[vi].Open {
@@ -550,9 +602,11 @@ func (m *Manager) tick() {
 
 	for _, ch := range checks {
 		if ch.stopID != "" {
-			if fq, ap, st, err := m.broker.Order(ch.stopID); err == nil && st == "filled" && fq > 0 {
-				m.recordExit(ch.vi, ch.sym, ap, "trail_stop", fq)
-				continue
+			if pollStops || mins >= eodFlatMin {
+				if fq, ap, st, err := m.broker.Order(ch.stopID); err == nil && st == "filled" && fq > 0 {
+					m.recordExit(ch.vi, ch.sym, ap, "trail_stop", fq)
+					continue
+				}
 			}
 		} else {
 			// naked (a failed re-protect earlier) — protect or flatten now
@@ -575,13 +629,28 @@ func (m *Manager) settleInflightBoot() {
 	}
 	m.mu.Unlock()
 	for _, f := range pend {
-		if f.OrderID == "" { // never confirmed placed; nothing to settle
-			m.dropInflight(f.Coid)
-			continue
-		}
-		fq, ap, st, err := m.broker.Order(f.OrderID)
-		if err != nil {
-			continue // keep it; retried next boot
+		var fq, ap float64
+		var st string
+		if f.OrderID == "" {
+			// Crash between the POST and its response — the order may STILL have been
+			// placed. The coid is the dedupe key; resolve it before deciding anything
+			// (dropping blind here is how a forgotten buy becomes a ghost share).
+			id, q, p, s, err := m.broker.OrderByCoid(f.Coid)
+			if err != nil {
+				continue // transient; retried next boot
+			}
+			if id == "" { // confirmed: never reached Alpaca
+				m.journal(f.Variant, "boot", f.Symbol, "in-flight "+f.Kind+" never placed — dropped")
+				m.dropInflight(f.Coid)
+				continue
+			}
+			fq, ap, st = q, p, s
+		} else {
+			var err error
+			fq, ap, st, err = m.broker.Order(f.OrderID)
+			if err != nil {
+				continue // keep it; retried next boot
+			}
 		}
 		m.journal(f.Variant, "boot", f.Symbol, fmt.Sprintf("in-flight %s settled: %s fq=%.0f", f.Kind, st, fq))
 		if f.Kind == "entry" && st == "filled" && fq > 0 {
@@ -625,8 +694,9 @@ func (m *Manager) rehydrate() {
 					m.recordExit(it.vi, it.sym, ap, "trail_stop_offline", fq)
 					continue
 				}
-				if st == "new" || st == "accepted" || st == "held" {
-					continue // still protected
+				switch st {
+				case "new", "accepted", "held", "pending_new", "accepted_for_bidding", "partially_filled":
+					continue // still resting/protecting — replacing it would DOUBLE the stop
 				}
 			}
 		}
@@ -788,7 +858,7 @@ func (m *Manager) saveStateLocked() {
 // ---------------- report ----------------
 
 func round2(v float64) float64 {
-	return float64(int(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }
 
 func pick(a, b float64) float64 {

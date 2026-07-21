@@ -11,6 +11,7 @@
 package surger
 
 import (
+	"fmt"
 	"math"
 	"time"
 )
@@ -239,13 +240,15 @@ func composite(f feats, close float64) bool {
 }
 
 // signals evaluates all three variants at the LAST completed bar. Returned array is
-// indexed by variant id. Purity is computed lazily at most once.
-func (s *series) signals() [NumVariants]bool {
+// indexed by variant id; the string is a feature snapshot for the journal (only built
+// when something fired — every logged signal carries the numbers that produced it, so
+// the live journal doubles as the learning dataset). Purity is computed lazily.
+func (s *series) signals() ([NumVariants]bool, string) {
 	var out [NumVariants]bool
 	t := len(s.c) - 1
 	f, ok := s.features(t)
 	if !ok {
-		return out
+		return out, ""
 	}
 	close := s.c[t]
 	comp := composite(f, close)
@@ -265,7 +268,16 @@ func (s *series) signals() [NumVariants]bool {
 	if purityOK && purity >= 3.0 && gte(f.r30, 0.004) && gte(f.upshare, 0.55) && close > f.vwap {
 		out[VarSpectral] = true
 	}
-	return out
+	why := ""
+	if out[VarC2] || out[VarC1] || out[VarSpectral] {
+		cus := -1
+		if s.cusumFire >= 0 {
+			cus = t - s.cusumFire
+		}
+		why = fmt.Sprintf("close=%.2f r30=%+.2f%% eff=%.2f ups=%.2f tstat=%.2f vr=%.2f vsurge=%.2f purity=%.2f cusum_age=%d vwap=%.2f",
+			close, f.r30*100, f.eff, f.upshare, f.tstat, f.vr, f.vsurge, purity, cus, f.vwap)
+	}
+	return out, why
 }
 
 // etMinute converts a bar timestamp to ET minutes-of-day.

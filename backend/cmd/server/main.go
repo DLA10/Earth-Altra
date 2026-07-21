@@ -184,11 +184,13 @@ func main() {
 	// the strategy set and execution is explicitly enabled.
 	var sigEngine *signals.Engine
 	var sigSymbols []string
+	var surgerSymbols []string // tradables ONLY — never SPY/QQQ/SMH context symbols
 	if uni, err := signals.LoadUniverse(cfg.QuantUniverseCandidates...); err != nil {
 		log.Printf("signals: disabled — %v", err)
 	} else {
 		sigEngine = signals.NewEngine(uni, "data")
 		sigSymbols = uni.All()
+		surgerSymbols = uni.Symbols()
 		go seedSignalEngine(client, sigEngine, sigSymbols)
 		// Live-only microstructure columns (spread, order flow) for the ML training set —
 		// historical bars can't reconstruct these, so they only get recorded live.
@@ -221,13 +223,13 @@ func main() {
 	// SIP stream (completed bars only — no forming-bar skew). Symbol exclusivity keeps
 	// it from ever touching a dip+rise position; quant Rehydrate skips srg* coids.
 	var srgMgr *surger.Manager
-	if cfg.PaperDipKey != "" && cfg.PaperDipSecret != "" && len(sigSymbols) > 0 && cfg.SurgerLive {
+	if cfg.PaperDipKey != "" && cfg.PaperDipSecret != "" && len(surgerSymbols) > 0 && cfg.SurgerLive {
 		srgBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperDipKey, cfg.PaperDipSecret)
 		etzSrg, lerr := time.LoadLocation("America/New_York")
 		if lerr != nil {
 			etzSrg = time.UTC
 		}
-		srgMgr = surger.New(srgBroker, etzSrg, "data", true, sigSymbols, cfg.SurgerNotional, cfg.SurgerSlots)
+		srgMgr = surger.New(srgBroker, etzSrg, "data", true, surgerSymbols, cfg.SurgerNotional, cfg.SurgerSlots)
 		srgMgr.Start(ctx)
 	} else {
 		log.Printf("surger: disabled (needs PAPER_DIP keys + signal universe + SURGER_LIVE)")
