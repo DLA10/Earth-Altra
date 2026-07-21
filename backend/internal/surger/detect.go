@@ -44,10 +44,14 @@ type series struct {
 
 	cusumS    float64
 	cusumFire int // index of the most recent CUSUM fire (-1 = never today)
+
+	// 30-bar-normalized twin used ONLY by the early-mode detector (bars 35..119)
+	cusumS30    float64
+	cusumFire30 int
 }
 
 func newSeries(day string) *series {
-	return &series{day: day, cusumFire: -1}
+	return &series{day: day, cusumFire: -1, cusumFire30: -1}
 }
 
 // append adds one completed bar and updates the CUSUM state.
@@ -96,6 +100,18 @@ func (s *series) append(minute int, o, h, l, c, v float64) {
 		if s.cusumS > 8.0 {
 			s.cusumFire = t
 			s.cusumS = 0
+		}
+	}
+	// early-mode twin: same break test normalized by the 30-bar stdev, live from bar 30
+	if t >= 30 {
+		sd := s.stdR1(t-1, 30)
+		if math.IsNaN(sd) || sd < 1e-8 {
+			sd = 1e-8
+		}
+		s.cusumS30 = math.Max(0, s.cusumS30+r/sd-0.75)
+		if s.cusumS30 > 8.0 {
+			s.cusumFire30 = t
+			s.cusumS30 = 0
 		}
 	}
 }
@@ -239,6 +255,52 @@ func composite(f feats, close float64) bool {
 		close > f.vwap
 }
 
+// earlySignal is the validated 30-min-warmup variant (E2 in the 2026-07-21 early-mode
+// study, surger_early_results.json): short-window composite (30-bar eff/upshare/tstat +
+// vsurge) ∧ fresh sd30-CUSUM break ∧ VR(5,1|30) ≥ 1.1 ∧ close > VWAP. Active bars
+// 35..119 and 10:00-11:29 ET only — the main detectors take over at bar 120. Study:
+// 38 trades / 97 sessions, 63.2% WR, green @2bp in 3/4 windows incl. both true OOS
+// months; expect ~0.4 fires/day across the universe. Books under C2 (same exit).
+func (s *series) earlySignal(t int) (bool, string) {
+	if t < 35 || t > 119 {
+		return false, ""
+	}
+	if m := s.minute[t]; m < 10*60 || m > 11*60+29 {
+		return false, ""
+	}
+	if s.cusumFire30 < 0 || t-s.cusumFire30 >= 15 {
+		return false, ""
+	}
+	r30 := s.lc[t] - s.lc[t-30]
+	if !(r30 > 0) {
+		return false, ""
+	}
+	eff := math.Abs(r30) / (s.sum(s.absR, t, 30) + 1e-12)
+	ups := s.sum(s.upV, t, 30) / (s.sum(s.cumV, t, 30) + 1e-9)
+	sd30 := s.stdR1(t, 30)
+	tstat := math.NaN()
+	if !math.IsNaN(sd30) {
+		tstat = r30 / (sd30 + 1e-12)
+	}
+	vsurge := math.NaN()
+	if t-5 >= 29 {
+		vsurge = (s.sum(s.cumV, t, 5) / 5) / (s.sum(s.cumV, t-5, 30)/30 + 1e-9)
+	}
+	sd5 := s.stdR5(t, 30)
+	vr := math.NaN()
+	if !math.IsNaN(sd30) && !math.IsNaN(sd5) {
+		vr = (sd5 * sd5) / (5*sd30*sd30 + 1e-15)
+	}
+	vwap := s.cumPV[t] / (s.cumV[t] + 1e-9)
+	if gte(eff, 0.55) && gte(ups, 0.60) && gte(tstat, 2.0) && gte(vsurge, 1.5) &&
+		gte(vr, 1.1) && s.c[t] > vwap {
+		why := fmt.Sprintf("early: close=%.2f r30=%+.2f%% eff=%.2f ups=%.2f tstat30=%.2f vr30=%.2f vsurge=%.2f cusum30_age=%d vwap=%.2f",
+			s.c[t], r30*100, eff, ups, tstat, vr, vsurge, t-s.cusumFire30, vwap)
+		return true, why
+	}
+	return false, ""
+}
+
 // signals evaluates all three variants at the LAST completed bar. Returned array is
 // indexed by variant id; the string is a feature snapshot for the journal (only built
 // when something fired — every logged signal carries the numbers that produced it, so
@@ -246,6 +308,15 @@ func composite(f feats, close float64) bool {
 func (s *series) signals() ([NumVariants]bool, string) {
 	var out [NumVariants]bool
 	t := len(s.c) - 1
+	// early mode: before the main windows are full (bar 120), only the validated
+	// short-window variant may fire; it enters C2's book with an "early:" journal tag.
+	if t <= 119 {
+		if fire, why := s.earlySignal(t); fire {
+			out[VarC2] = true
+			return out, why
+		}
+		return out, ""
+	}
 	f, ok := s.features(t)
 	if !ok {
 		return out, ""

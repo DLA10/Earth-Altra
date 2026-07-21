@@ -37,6 +37,15 @@ ratchets) · EOD flat 15:55 · one position/symbol across ALL variants + the who
 peak → 0.5% once peak ≥ +1.5% · C1 trails 2.5% → 1.0% once ≥ +2.5% · SPECTRAL trails
 3.5% → 2.0% once ≥ +3.5% (the original RIDER-validated exit).
 
+**Early mode (operator request 2026-07-21, validated same day):** the main windows
+(VR-120/purity-128) mean nothing fires before ~11:30 ET. A short-window variant covers
+bars 35–119 (≈10:05–11:29): 30-bar composite ∧ sd30-CUSUM break ≤15 bars ∧ VR(5,1|30)
+≥ 1.1. Study over the same 97 sessions (E0/E1 configs FAILED — the loose morning
+versions lose): E2 passed the pre-registered bar — 38 trades, 63.2% WR, @2bp green in
+3/4 windows incl. both true OOS months (+$37 Jun, +$104 May, +$122 Mar–Apr; −$4 on 2
+Jul trades). Rare by design (~0.4 fires/day) with a thin recent sample — books under C2
+with an `early:` journal tag so it stays separately attributable.
+
 ## Validation record (four windows, 97 sessions, $1.5k harness slices)
 
 | Window | Sessions | C2 trades | WR | Gross | @5bp/side |

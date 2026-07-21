@@ -552,9 +552,10 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   deliberate shared-account exception: runs on the DIP+RISE paper account with strict
   `srg1_/srg2_/srg3_` coid attribution (quant Rehydrate skips `srg*`; dip P&L keys off
   `QuantDip__`); enters only symbols the account holds zero of. Completed-bar signals,
-  RTH-only feature windows, entries 10:00–15:30 ET (warm-up means nothing fires before
-  ~11:30), per-variant trails (C2 1.5→0.5% · C1 2.5→1.0% · SPECTRAL 3.5→2.0% — exit
-  study in SURGER_V2.md), EOD flat 15:55, 3 separate books + journal in `data/surger/`.
+  RTH-only feature windows, entries 10:00–15:30 ET (main detectors fire from ~11:30;
+  a validated short-window "early mode" covers ~10:05–11:29 under C2's book, journal
+  tag `early:`), per-variant trails (C2 1.5→0.5% · C1 2.5→1.0% · SPECTRAL 3.5→2.0% —
+  exit study in SURGER_V2.md), EOD flat 15:55, 3 books + journal in `data/surger/`.
 - **RIDP** (`internal/ridp`): see §3 — REVERTER observation week in progress (unfiltered
   live −$2,209 over 3 sessions; the 3 designed filters replay to −$300; decision after
   the week per REVERTER_FILTERS.md). Known open ops issues, deliberately parked with that
