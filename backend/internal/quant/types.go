@@ -138,6 +138,7 @@ type QuantTrade struct {
 
 type QuantState struct {
 	RealizedPNL   float64         `json:"realized_pnl"`
+	RealizedToday float64         `json:"realized_today"` // trades exited TODAY (ET) only
 	UnrealizedPNL float64         `json:"unrealized_pnl"`
 	WinRate       float64         `json:"win_rate"`
 	TotalTrades   int             `json:"total_trades"`

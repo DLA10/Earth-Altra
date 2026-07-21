@@ -345,8 +345,55 @@ export interface QuantTrade {
   pnl: number;
   exit_reason: string;
 }
+// SURGER v2 lab: three continuation detectors on the dip+rise paper account.
+export interface SurgerPosition {
+  variant: number;
+  symbol: string;
+  qty: number;
+  entry_price: number;
+  opened_at: string;
+  peak: number;
+  stop_px: number;
+  signal_px: number;
+  entry_slip_bps: number;
+  high_px: number;
+  low_px: number;
+}
+export interface SurgerTrade {
+  variant: number;
+  symbol: string;
+  qty: number;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  reason: string;
+  opened_at: string;
+  closed_at: string;
+}
+export interface SurgerVariant {
+  name: string;
+  coid_prefix: string;
+  realized_pnl: number;
+  realized_today: number;
+  unrealized_pnl: number;
+  total_trades: number;
+  win_rate: number;
+  open: SurgerPosition[];
+  trades: SurgerTrade[];
+}
+export interface SurgerReport {
+  enabled: boolean;
+  live?: boolean;
+  notional?: number;
+  slots?: number;
+  universe?: number;
+  note?: string;
+  variants?: SurgerVariant[];
+}
+
 export interface QuantStateT {
   realized_pnl: number;
+  realized_today: number; // trades exited TODAY (ET) only
   unrealized_pnl: number;
   win_rate: number;
   total_trades: number;

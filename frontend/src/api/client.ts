@@ -6,6 +6,7 @@ import type {
   ChartRange,
   DecepticonWatchlist,
   DipRiseReport,
+  SurgerReport,
   IntervalRank,
   KeyCheck,
   MarketMovers,
@@ -119,6 +120,7 @@ export const api = {
 
   // Dip+Rise desk (Agent 2 dips + rise watcher) — its own paper account.
   diprise: () => req<DipRiseReport>("/api/diprise"),
+  surger: () => req<SurgerReport>("/api/surger"),
 
   // RIDP two-strategy deterministic paper desk (Rider & Dipper).
   ridp: () => req<RidpReport>("/api/ridp"),

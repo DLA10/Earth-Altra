@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ReasonStat aggregates closed trades by their exit reason.
@@ -68,13 +69,14 @@ type AgentInfo struct {
 // DeskReport is one desk's (paper account's) headline line: the signal desk and the
 // dip+rise desk each trade their own account with their own allocator and loss cap.
 type DeskReport struct {
-	Name       string        `json:"name"` // "signal" | "dip+rise"
-	Live       bool          `json:"live"`
-	Alloc      AllocSnapshot `json:"alloc"`
-	Realized   float64       `json:"realized_pnl"`
-	Unrealized float64       `json:"unrealized_pnl"`
-	DayPnL     float64       `json:"account_day_pnl"` // Alpaca: equity − last_equity (broker truth)
-	Trades     int           `json:"trades"`
+	Name          string        `json:"name"` // "signal" | "dip+rise"
+	Live          bool          `json:"live"`
+	Alloc         AllocSnapshot `json:"alloc"`
+	Realized      float64       `json:"realized_pnl"`
+	RealizedToday float64       `json:"realized_today"` // closed TODAY (ET) only
+	Unrealized    float64       `json:"unrealized_pnl"`
+	DayPnL        float64       `json:"account_day_pnl"` // Alpaca: equity − last_equity (broker truth)
+	Trades        int           `json:"trades"`
 }
 
 // QuantReport is the full state the Paper·Claude page renders. Since the desk split,
@@ -103,6 +105,13 @@ func (e *Engine) deskState(b *Broker) QuantState {
 	if err != nil {
 		return QuantState{}
 	}
+	// Day slice of the cumulative number: what THIS session actually realized (ET day).
+	day := time.Now().In(e.loc).Format("2006-01-02")
+	for _, t := range st.Trades {
+		if t.ExitTime.In(e.loc).Format("2006-01-02") == day {
+			st.RealizedToday += t.PNL
+		}
+	}
 	return st
 }
 
@@ -116,6 +125,7 @@ func (e *Engine) MergedState() QuantState {
 	sig := e.deskState(e.sigBroker)
 	m := QuantState{
 		RealizedPNL:   dip.RealizedPNL + sig.RealizedPNL,
+		RealizedToday: dip.RealizedToday + sig.RealizedToday,
 		UnrealizedPNL: dip.UnrealizedPNL + sig.UnrealizedPNL,
 		Positions:     append(append([]QuantPosition{}, dip.Positions...), sig.Positions...),
 		Trades:        append(append([]QuantTrade{}, dip.Trades...), sig.Trades...),
@@ -170,9 +180,11 @@ func (e *Engine) Report() QuantReport {
 		}
 		r.Desks = []DeskReport{
 			{Name: "signal", Live: e.sigLive, Alloc: sigSnap, DayPnL: deskDay(e.sigBroker),
-				Realized: round2(sig.RealizedPNL), Unrealized: round2(sig.UnrealizedPNL), Trades: sig.TotalTrades},
+				Realized: round2(sig.RealizedPNL), RealizedToday: round2(sig.RealizedToday),
+				Unrealized: round2(sig.UnrealizedPNL), Trades: sig.TotalTrades},
 			{Name: "dip+rise", Live: e.live, Alloc: dipSnap, DayPnL: deskDay(e.broker),
-				Realized: round2(dip.RealizedPNL), Unrealized: round2(dip.UnrealizedPNL), Trades: dip.TotalTrades},
+				Realized: round2(dip.RealizedPNL), RealizedToday: round2(dip.RealizedToday),
+				Unrealized: round2(dip.UnrealizedPNL), Trades: dip.TotalTrades},
 		}
 		r.State = sig // SIGNAL account only — each desk's P&L stays its own
 	} else {

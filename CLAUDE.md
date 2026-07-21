@@ -2,12 +2,9 @@
 
 Single-user, real-money US-equity trading terminal built for **sub-second intraday
 execution**. A Go backend ingests Alpaca's real-time SIP market data, aggregates candles
-in memory, and fans them out to a React browser client over a WebSocket. The product name
-shown in the UI is **Earth-Altra** (top nav) / **OPTIMUS** (the Execution page); the repo
-folder is still `Live-Optimus`.
-
-> The folder/app was renamed in the UI only — internal identifiers, package paths
-> (`live-optimus/backend`), and `package.json` name still say `live-optimus`.
+in memory, and fans them out to a React browser client over a WebSocket. UI name:
+**Earth-Altra** (top nav) / **OPTIMUS** (Execution page); repo folder is `Live-Optimus`
+(internal identifiers and package paths still say `live-optimus`).
 
 ---
 
@@ -34,20 +31,20 @@ marketable limit fills at the current price). So for any order/trade feature:
 
 ## 1. Tech stack
 
-**Backend (Go 1.26)** — chosen for low-latency, high-throughput WebSocket fan-out with no
-meaningful GC pauses. Credentials live only on the server.
-- `github.com/alpacahq/alpaca-trade-api-go/v3` v3.8.1 — trading + market-data + streaming SDK
-- `github.com/coder/websocket` v1.8.12 — browser WebSocket server
+**Backend (Go 1.26)** — low-latency WebSocket fan-out, no meaningful GC pauses. Credentials
+live only on the server.
+- `github.com/alpacahq/alpaca-trade-api-go/v3` — trading + market-data + streaming SDK
+- `github.com/coder/websocket` — browser WebSocket server
 - `github.com/go-chi/chi/v5` + `go-chi/cors` — HTTP router/middleware
 - `github.com/joho/godotenv` — `.env` loading
-- `github.com/shopspring/decimal` — money math (SDK uses decimals; we convert to float for JSON)
+- `github.com/shopspring/decimal` — money math (converted to float64 at the JSON boundary)
 - `_ "time/tzdata"` — bundles the tz DB so `America/New_York` works on Windows
 
 **Frontend (React 18.3 + TypeScript 5.6 + Vite 5.4)**
-- `lightweight-charts` ^4.2.3 — TradingView canvas charts (candles + volume + indicator overlays).
-  **v4 has no native panes**, so the RSI sub-pane is a second chart synced on the logical range.
-- Tabler icons via CDN webfont (`index.html`)
-- No state library — plain React hooks; one resilient WebSocket per `useWebSocket()` consumer.
+- `lightweight-charts` ^4.2.3 — TradingView canvas charts. **v4 has no native panes**, so
+  the RSI sub-pane is a second chart synced on the logical range.
+- Tabler icons via CDN webfont; no state library — plain React hooks; one resilient
+  WebSocket per `useWebSocket()` consumer.
 
 ---
 
@@ -57,29 +54,26 @@ meaningful GC pauses. Credentials live only on the server.
 Alpaca Trading REST ──┐
 Alpaca SIP WebSocket ─┤      ┌──────────────── Go backend (:8080) ─────────────────┐
 Alpaca Data REST  ────┘      │  alpaca.Client  → one SIP stream (trades/quotes/bars)│
-                             │       │                                              │
                              │   candles.Engine (1/5/10m, in-memory, bad-tick guard)│
                              │   scanner.Scanner (DECEPTICON universe metrics)      │
                              │   flow.Tracker  (buy/sell pressure)                  │
-                             │       │                                              │
                              │   hub.Hub  ── WebSocket fan-out ──► browsers         │
                              │   api.Server (chi) ── REST: orders/account/history…  │
                              └──────────────────────────────────────────────────────┘
                                             ▲                    │ /ws + /api/*
 React + TypeScript (:5173, Vite) ───────────┘◄───────────────────┘
-   Portal shell → Execution | Watchlist | DECEPTICON | History | Metrics
+   Portal shell → Execution | Watchlist | DECEPTICON | History | Metrics | Paper·Claude | RIDP
 ```
 
-**Live price path (sub-second):** Alpaca trade tick → `alpaca` stream handler →
-`candles.Engine.OnTrade` folds it into every timeframe's forming candle → `OnUpdate` →
-`hub.BroadcastCandle` (throttled ~120ms) → only clients subscribed to that symbol → browser
-`upsert()` into the chart. Quotes (last price) go to **all** clients via `BroadcastQuote`
-(throttled ~150ms) and drive watchlists/headers.
+**Live price path (sub-second):** Alpaca trade tick → `candles.Engine.OnTrade` folds it
+into every timeframe's forming candle → `OnUpdate` → `hub.BroadcastCandle` (throttled
+~120ms) → subscribed clients → browser `upsert()`. Quotes go to **all** clients via
+`BroadcastQuote` (~150ms) and drive watchlists/headers.
 
-**Single SIP connection.** Alpaca permits one market-data stream per account
-(`alpaca/stream.go`). On each (re)connect it subscribes **trades+quotes** for
-`tqSymbols = execution ∪ watchlist` and **bars** for `barSymbols = tq ∪ scan universe`.
-Runtime-added symbols are subscribed live without a reconnect.
+**Single SIP connection.** One market-data stream per account (`alpaca/stream.go`). On each
+(re)connect it subscribes **trades+quotes** for `tqSymbols = execution ∪ watchlist` (+
+runtime-activated symbols) and **bars** for `barSymbols = tq ∪ scan universe`. Runtime
+symbols subscribe live without a reconnect.
 
 ---
 
@@ -87,342 +81,206 @@ Runtime-added symbols are subscribed live without a reconnect.
 
 ```
 backend/
-  cmd/server/main.go        wiring: config, stream loop, pollers, quant pipeline, HTTP server
+  cmd/server/main.go        wiring: config, stream loop, pollers, all desks, HTTP server
   cmd/backtest/main.go      replay historical bars through the signal strategies (read-only)
   internal/
     alpaca/                 SDK wrapper + JSON DTOs (client, stream, types, news, screener)
-    api/                    chi REST handlers + order validation (api.go), movers/stock news,
-                            quant report (quant.go)
+    api/                    chi REST handlers + server-side order validation
     candles/                in-memory OHLCV engine (1/5/10m), bad-tick guard
     config/                 env/.env loading (secrets stay server-side)
-    dipwatch/               Telegram dip+bounce alert bot (read-only observer; feeds quant)
+    dipwatch/               Telegram dip+bounce alert bot (read-only; feeds quant)
     execsym/                persisted symbol set: base + added − hidden
     flow/                   buy/sell order-flow estimator (quote rule)
     gemini/                 rate/budget-capped Gemini client ("why is it moving" summaries)
-    hub/                    WebSocket fan-out, per-client (symbol, timeframe) subscription,
-                            on-demand activation
-    quant/                  AI quant pipeline: Agent 2 entry + Allocator + Broker/Manager +
-                            Agent 3 exit + Agent 4 sentiment + daily review (paper account)
-    ridp/                   RIDP deterministic paper desk: RIDER + DIPPER + REVERTER (all live
-                            paper) — the operator's validated patterns; no LLM on the trade
-                            path; own journal/state under data/ridp/; "ridp_" coid attribution.
-                            REVERTER = intraday mean reversion (buy a −1.5σ dip below a 15-min
-                            rolling mean on high-amplitude names — top 55 by ATR% (fixed
-                            count since throughput mode; was top-tercile) —, exit at
-                            the mean, exchange stop at the z=−4 floor, flat 15:55). Routed
-                            through the SHARED allocator (competes with RIDER/DIPPER for the
-                            same 80%-of-buying-power budget) with NO per-strategy trade cap —
-                            only the budget limits it (reverter.go). Backtest edge is real but
-                            thin and cost-sensitive (12-month study: robustly positive only at
-                            ≤1-2 bps round-trip cost); running it live-paper is to measure real
-                            fill quality before trusting it
+    hub/                    WebSocket fan-out, per-client (symbol,timeframe) subscription
+    quant/                  AI quant pipelines: signal desk + dip/rise desk (see §13)
+    ridp/                   RIDP deterministic paper desk: RIDER + DIPPER + REVERTER, no
+                            LLM on the trade path, own journal under data/ridp/. REVERTER
+                            (−1.5σ dip below 15-min mean, exit at mean, z=−4 floor, flat
+                            15:55) is thin-edge & cost-sensitive; 3 entry knife filters are
+                            DESIGNED+BACKTESTED, not yet implemented — observation week in
+                            progress, evidence + decision rule in REVERTER_FILTERS.md /
+                            RIDP_REVERTER_FIXES.md
+    rbt/                    RBT pairs/mean-reversion paper desk (see §14)
+    sndk/                   SNDK 1-min micro-scalper paper desk (see §14)
+    breadcrumbs/            generalized volatility-scalper paper desk (see §14)
     risk/                   deterministic guardrails (loss cap, sizing, concurrency) — paper only
-    signals/                multi-strategy intraday signal engine + backtester (paper/shadow only)
+    signals/                multi-strategy intraday signal engine + backtester (paper/shadow)
     scanner/                DECEPTICON per-ticker scan metrics
     watchlist/              parses EVENT_DRIVEN_WATCHLIST.md → departments/tickers
   data/                     runtime state (gitignored): symbol sets, daily_universe.json,
-                            decisions/ (JSONL logs), reviews/
+                            decisions/, signals/, reviews/, ridp/, rbt/, sndk/, breadcrumbs/
 frontend/src/
   Portal.tsx                app shell + tab router + global SymbolSearch + OrderAlerts
-  App.tsx                   Execution ("Optimus") page (default export ExecutionEngine)
-  Watchlist.tsx             Watchlist page (stacked live charts + opening movers)
-  Decepticon.tsx            DECEPTICON scanner page (+ MarketMovers with news dropdowns)
-  Quant.tsx                 Paper · Claude page (quant pipeline report)
-  Ridp.tsx                  RIDP page (Rider, Dipper & Reverter live-paper desk; open-position
-                            P&L marked live to the WS quote stream — sub-second — between 3s
-                            REST polls)
-  Metrics.tsx               realized-P&L analytics
-  TradeHistory.tsx          Alpaca fill log
+  App.tsx                   Execution ("Optimus") page (ExecutionEngine)
+  Watchlist.tsx / Decepticon.tsx / Quant.tsx / Ridp.tsx / Metrics.tsx / TradeHistory.tsx
   indicators.ts             Bollinger + RSI math + signal grading
   costBasis.ts              average-cost reconstruction + realized trades
-  marketStatus.ts           client-side US market phase (pre/open/after/closed)
-  order.ts                  localStorage symbol-order persistence + array move
-  types.ts                  all shared TS types + ChartView/ChartRange helpers
-  api/client.ts             typed fetch wrapper for every REST endpoint
-  hooks/useWebSocket.ts     one resilient auto-reconnecting WS per consumer
-  hooks/useHistoryBars.ts   fetch static range bars + mergeLastBar (live last bar)
-  components/               Chart, OrderPanel, ChartOrderPopup (draw-order), ConfirmModal,
-                            Header, Positions, Watchlist (left panel), LiveChart, MiniChart,
-                            ChartModal, NewsPanel, MarketMovers, SymbolSearch, StrategyBadge,
-                            OrderAlerts, RangeToggle, LazyMount, ErrorBoundary
-EVENT_DRIVEN_WATCHLIST.md   DECEPTICON universe (markdown tables → 39 depts, ~683 tickers;
-                            since 2026-07-16 includes full S&P 500 core coverage + new
-                            listings like SKHY — every ticker verified tradable on Alpaca)
-QUANT_UNIVERSE.json         curated ~160-symbol signal-engine universe (liquid large caps, no penny stocks)
-Instruction.md              pre-market universe-selection playbook (writes daily_universe.json)
+  marketStatus.ts           client-side US market phase
+  order.ts / types.ts / api/client.ts / hooks/ / components/   (Chart, OrderPanel,
+                            ChartOrderPopup, ConfirmModal, Header, Positions, Watchlist,
+                            LiveChart, MiniChart, ChartModal, NewsPanel, MarketMovers,
+                            SymbolSearch, StrategyBadge, OrderAlerts, RangeToggle,
+                            LazyMount, ErrorBoundary)
+EVENT_DRIVEN_WATCHLIST.md   DECEPTICON universe (39 depts, ~683 tickers incl. full S&P 500)
+QUANT_UNIVERSE.json         signal-engine universe (534 names since the 2026-07-16
+                            throughput expansion; curated ~160 liquid set preserved in
+                            QUANT_UNIVERSE.baseline-2026-07-16.json)
+Instruction.md              pre-market universe-selection playbook
 QUANT_VISION.md             design + roadmap for the AI agentic quant system
-scripts/                    PowerShell launchers (check-keys, run-backend/frontend, launch)
-START-Live-Optimus.bat      one-click Windows launcher
+THROUGHPUT_MODE.md          all loosened dials 2026-07-16 + rollback env overrides
+scripts/                    PowerShell launchers · START-Live-Optimus.bat  one-click launcher
 ```
 
 ---
 
-## 4. Backend packages
+## 4. Backend packages (details that matter)
 
-- **`config`** — loads `APCA_API_KEY_ID/SECRET`, `ALPACA_PAPER`, `ALPACA_DATA_FEED`
-  (sip/iex/otc), `SYMBOLS`, `MAX_ORDER_NOTIONAL` (default 25000), `HTTP_ADDR`,
-  `ALLOWED_ORIGINS`, `DECEPTICON_ENABLED`, plus the optional Gemini/Telegram/quant keys
-  (full table in §9). Live vs paper toggles the Alpaca trading base URL. Secrets never
-  reach the browser.
+- **`config`** — loads Alpaca keys, `ALPACA_PAPER`, `ALPACA_DATA_FEED`, `SYMBOLS`,
+  `MAX_ORDER_NOTIONAL`, CORS, desk keys and flags (full table §9). Live vs paper toggles
+  the trading base URL. Secrets never reach the browser.
 
-- **`alpaca`** — wraps the SDK behind float/JSON DTOs.
-  - `client.go`: `VerifyKeys` (validates creds + probes SIP entitlement), `GetAccount`,
-    `GetPositions`, `GetOpenOrders`, `GetAsset` (fractionable/tradable), `SearchAssets`
-    (in-memory search over a cached ~10k tradable-equity list, 12h TTL), `PlaceOrder`
-    (maps simple/bracket/oco/oto, stops, trailing, GTC, extended hours), `Readiness`
-    (account gating + market clock), `CancelOrder`/`CancelAllOrders`, `GetFills`/`GetAllFills`
-    (paginated activity log), `StreamTradeUpdates` (background order/fill events).
-  - `stream.go`: `Backfill` (today's 1-min session), `RangeBars` (split-adjusted history for
-    1W=hourly / 1M·6M·1Y=daily), `GetMultiDailyBars`/`GetMultiIntradayBars` (scanner seed),
-    `StartStream`, `SubscribeTradeQuote`/`UnsubscribeTradeQuote` (runtime symbols).
-  - `news.go`: Benzinga headlines + a keyword sentiment tag. `screener.go`: market-wide
-    gainers/losers via the v1beta1 screener endpoint (called directly; SDK doesn't wrap it).
+- **`alpaca`** — SDK wrapper behind float/JSON DTOs. `client.go`: `VerifyKeys` (creds +
+  SIP probe), account/positions/orders, `GetAsset`, `SearchAssets` (cached ~10k list),
+  `PlaceOrder` (simple/bracket/oco/oto, stops, trailing, GTC, extended hours),
+  `Readiness`, cancels, `GetFills`/`GetAllFills`, `StreamTradeUpdates`. `stream.go`:
+  `Backfill` (today's 1-min session), `RangeBars` (1W hourly / 1M·6M·1Y daily),
+  `GetMultiDailyBars`/`GetMultiIntradayBars` (scanner seed + RBT day-snapshot),
+  `StartStream`, runtime `SubscribeTradeQuote`. `news.go` Benzinga headlines;
+  `screener.go` market movers.
 
-- **`candles`** — the live OHLCV engine. `series.apply()` folds a trade into the forming
-  bar with a **bad-tick guard** (drops non-positive prices and wild jumps within a short
-  window). Timeframes are 1/5/10 min; `Seed` loads REST backfill and rolls 1-min bars up;
-  retention is 1500 bars/series (~a full extended session). `Tracks(sym)` lets callers skip
-  re-backfilling an already-live symbol. `OnUpdate` callback drives `hub.BroadcastCandle`.
+- **`candles`** — live OHLCV engine. `series.apply()` folds trades into the forming bar
+  with a bad-tick guard (drops non-positive prices and wild jumps). Timeframes 1/5/10 min;
+  `Seed` from REST backfill; retention 1500 bars/series; `Tracks(sym)`; `OnUpdate` drives
+  the hub. `Snapshot` INCLUDES the still-forming bar — scorers that need completed bars
+  must cut it (breadcrumbs does).
 
-- **`hub`** — WebSocket fan-out. Each client has **one** active candle subscription — a
-  (symbol, timeframe) pair (`subscribe`) — plus an optional scan subscription
-  (`scan_subscribe`). `BroadcastCandle` → subscribers of that symbol+timeframe (throttled
-  120ms per pair); `BroadcastQuote` → all (throttle 150ms); `BroadcastScan` → scan
-  subscribers. `SnapshotFn` returns engine history on subscribe.
-  **`EnsureLiveFn`** is called synchronously on subscribe so a client can subscribe to **any**
-  symbol — the server backfills + starts streaming it on demand (see §7).
+- **`hub`** — WebSocket fan-out. One active candle subscription per client (symbol,
+  timeframe) + optional scan subscription. `SnapshotFn` returns history on subscribe.
+  **`EnsureLiveFn`** is called synchronously on subscribe so a client can subscribe to
+  **any** symbol — the server backfills + streams it on demand (§7).
 
 - **`scanner`** — per-ticker `State` over the DECEPTICON universe: price, % vs prior
-  close, % vs open, opening-range moves (OR5/15/20), RVOL (vs typical-at-this-time),
-  session VWAP, day high/low, bid/ask spread, catalyst. Seeded from daily (prior close +
-  avg volume) and today's 1-min bars; updated by live bars/quotes. `SessionBars` feeds the
-  DECEPTICON mini-charts; `OpeningAnalysis` ranks the watchlist by move from the open.
-
-- **`flow`** — estimates buyer- vs seller-initiated volume (quote rule: trade ≥ ask = buy,
-  ≤ bid = sell, else nearest side). Keeps a day-cumulative tally and a rolling 5-min window.
-
-- **`execsym`** — thread-safe, disk-persisted symbol set: `base` (config) + `added`
-  (runtime) − `hidden` (user-removed, incl. base). Powers both Execution and Watchlist
-  symbol management; survives restarts via `data/*.json`.
-
-- **`watchlist`** — parses `EVENT_DRIVEN_WATCHLIST.md` markdown tables into departments
-  (with Tabler icons) and tickers/catalysts. Never hardcoded — parsed at load.
+  close/open, opening-range moves, time-of-day RVOL, session VWAP, day high/low, spread,
+  catalyst. `SessionBars` feeds mini-charts; `OpeningAnalysis` ranks movers from the open.
 
 - **`api`** — chi handlers + **server-side order validation** (`validateOrder`,
-  `checkSellable`). Holds `Server` deps and the on-demand `EnsureLive`/`activateSymbol`
-  logic. Full endpoint list in §10.
+  `checkSellable`), on-demand `EnsureLive`/`activateSymbol`. Endpoints in §10.
 
-- **`dipwatch`** — Telegram dip+bounce alert bot over the whole watchlist (oversold,
-  below-VWAP pullback ≥ ~0.5×ATR confirmed by a green 5-min candle; 15-min cooldown).
-  Read-only observer; its hook also feeds each confirmed dip to the quant pipeline.
+- **`quant` + `signals`** — the AI quant team: TWO desks on two paper accounts (§13.9),
+  sharing Agent 3 exits, Agent 4 sentiment (optional), Strategist, scoreboard, Reviewer.
+  Signal desk: six deterministic detectors over QUANT_UNIVERSE → `SignalTrader` gauntlet
+  (§13.2) → shared `Manager` (market entry, trailing-stop floor, Agent 3 exit loop, 15:55
+  flatten, `Rehydrate` on restart; positions carry an `EntryContext` so exits know intent
+  and P&L attributes per pipeline). Dip/rise desk: Telegram dips → Agent 2 buy/no-buy;
+  declined dips arm the deterministic rise watcher (`risewatch.go`, a REGIME tool — live
+  only under cautious/corrective posture via `QUANT_RISE_LIVE`). Governance: pre-market
+  Strategist → `daily_universe.json`, post-close Reviewer, eval-scoreboard demotion (with
+  a 5-outcome probation fast-path), nightly clf retrain, daily research loop
+  (human-gated). Every decision → JSONL in `data/decisions/`. Model proposes, Go disposes.
 
-- **`quant`** — the AI paper-trading desk on a SEPARATE Alpaca paper account
-  (`PAPER_CLAUDE_*`, base URL hardcoded to `paper-api.alpaca.markets` in `main.go`); there
-  is **no code path from any model to the live keys** (verified: the paper keys are 401'd
-  by the live endpoint). **TWO entry pipelines** share one allocator, one Manager (Agent 3
-  exits), one loss cap, one paper account:
-  - **Signal pipeline (primary)**: `signals` engine → `SignalTrader` gauntlet (see §13.2) →
-    Manager. The validated Tier-1 config: 6 strategies + **ML clf gate** (`clfgate.go`) +
-    LLM judge (`signaljudge.go`) + allocator + Agent 3.
-  - **Dip pipeline (older)**: `dipwatch` → `Engine.OnDip` → **Agent 2** (`agent2.go`, forced
-    tool call, buy/no-buy) → allocator → Manager. **No ML gate.** Kept because the operator's
-    Telegram dip alerts feed it — do NOT disturb `dipwatch`.
-  - **Rise pipeline (`risewatch.go`)**: dips Agent 2 DECLINES are armed for 10 min; a
-    completed green 1-min close +0.10% above the dip price — with the dip low never
-    undercut (undercut = disarm) and the confirming bar's volume ≥ the post-dip average —
-    confirms the rise → deterministic entry (no LLM) through the shared
-    posture/loss-cap/allocator tail with time-boxed exits (1.5% trail, +2R target, 40-min
-    max hold via `EntryContext.TrailPct/MaxHoldMin`). Validation status (2026-07-09):
-    the rule made +27R/228 entries on a 1-month dipwatch-recipe replay (391 dips), but
-    the 12-MONTH replay (8,703 dips → 4,667 entries) is NEGATIVE overall (−530R; bleeds
-    in trending-up regimes 2025Q4/2026Q1, pays in the corrective 2026Q2 tape), and
-    walk-forward ML gating (LightGBM at 4 margins + logistic baseline) only reduced the
-    bleed, never turned it positive. Conclusion: a REGIME tool, not all-weather. The
-    pre-registered hypothesis is that it earns a live slot only under a cautious/
-    corrective posture — which is the current tape, so since 2026-07-16 it runs **LIVE**
-    (`QUANT_RISE_LIVE=true` in .env; config default remains false). Bench it again
-    (`QUANT_RISE_LIVE=false`) if the regime turns into a sustained uptrend.
-  - **Shared infrastructure**: `Allocator` (`allocator.go` — shared budget **capped at the
-    real paper-account equity** via `Broker.Account()` + `SetEquityCeiling`, synced every
-    60s; 3 slots; conviction full/half sizing; quality-ranked under contention). `Manager`
-    (`manager.go` — market entry → deterministic trailing-stop floor → Agent 3 exit loop →
-    15:55 ET flatten → `Rehydrate` on restart. Positions carry an `EntryContext`
-    (source/strategy/target/stop) so **exits know intent** and **P&L attributes per
-    pipeline**; every close logs a source-tagged `{source,pnl,win,conf,held_min}` outcome).
-    `Broker` (`broker.go` — paper orders + `Reconstruct` P&L + `Account`). Agent 4 sentiment
-    (local Ollama, advisory).
-  - **Governance**: pre-market **Strategist** (`strategist.go` → `daily_universe.json`
-    posture + budget within code clamps; boot catch-up), post-close **Reviewer**
-    (`review.go`, after 16:10 ET → `data/reviews/`), the **eval scoreboard** demotion feed
-    (`internal/evals`), and the daily **research loop** (`ml/research_loop.py`, 13:30 ET →
-    Telegram, human-gated).
-  - Every decision → JSONL in `data/decisions/`. Report at `/api/quant` (`report.go`:
-    alloc, state, exit attribution, **dip scorecard**, **agent roster**, review). Model
-    proposes, Go disposes. See §13 for the live-operations playbook; `QUANT_VISION.md` for
-    the roadmap.
+- **`risk`** — deterministic guardrails shared by backtester and paper desks: daily loss
+  cap, per-trade sizing, concurrency, overnight cap. Never wired to the real-money path.
 
-- **`signals`** — the multi-strategy intraday signal engine (QUANT_VISION Phase 1): six
-  deterministic detectors (ORB breakout, VWAP reclaim, momentum continuation, dip bounce,
-  relative strength, first-hour reversal) over the curated QUANT_UNIVERSE.json (~160
-  liquid large caps since 2026-07-09), fed as an ADDITIVE bar consumer off the single SIP
-  stream. Every signal + its
-  counterfactual bracket outcome is journaled to `data/signals/*.jsonl` (the ML training
-  set), annotated with the **time-of-day gate** verdict (`tod_stats.json`, decayed
-  buckets — halflife 30 outcomes; `EntryAllowed`). The TOD gate is **shadow-only by
-  default** since the 2026-07 re-validation (its edge didn't survive a regime change —
-  RESEARCH_BACKLOG #3); `QUANT_TOD_GATE=true` re-enforces it. The same detectors power
-  `cmd/backtest`. Execution: `quant.SignalTrader` bridges published signals to the PAPER
-  broker — **ML entry gate** (`quant/clfgate.go`: per-strategy LightGBM classifiers
-  trained nightly by `ml/train_live.py`, scored in-process via `leaves` with a load-time
-  Python/Go parity check; rejects expected R < 0.03, fail-open without fresh models —
-  the promoted RESEARCH_BACKLOG #15 mechanism) → LLM entry judge (`signaljudge.go`,
-  red-flag veto + conviction sizing) → shared allocator → Manager (trailing-stop floor,
-  Agent 3 exits, EOD flatten) — gated by `QUANT_SIGNALS_LIVE`, scoreboard demotion, and
-  the daily loss cap.
+- **`dipwatch`** — Telegram dip+bounce alerts over the whole watchlist (oversold,
+  below-VWAP pullback ≥ ~0.5×ATR + green 5-min confirm; 15-min cooldown). Read-only
+  observer; do NOT disturb — its hook feeds the quant dip pipeline.
 
-- **`risk`** — deterministic guardrails shared by the backtester and (future) live-paper
-  signal execution: daily loss cap, per-trade risk / notional sizing, concurrency cap,
-  overnight cap. Pure rules; never wired to the real-money path.
-
-- **`gemini`** — self-throttled (RPM + daily cap) Gemini client for the on-click
-  "why is it moving" stock-news summaries. Disabled-safe; never on the order path.
-
-`main.go` wires it all: load config → verify keys → build engine/hub/managers → backfill →
-seed scanner + **seed signal engine** (daily ATR(14)/avgVol(20), goroutines) → start the
-single SIP stream loop (auto-reconnect, re-backfill on reconnect) → **quant block**
-(build allocator/broker/manager/agents → **clf gate load + parity check** → **equity sync
-(startup + 60s)** → **`Manager.Rehydrate`** → Reviewer loop → SignalTrader wire (+ scoreboard
-`Demoted` closure) → **Strategist** (boot catch-up + daily window) → **nightly retrain**
-goroutine) → **evals scoreboard refresh (every 10 min)** → **research loop** goroutine →
-dip watcher → account poller (2–3s) → HTTP server. The quant block only arms when
-`PAPER_CLAUDE_*` keys are set; each governance piece is independently flag-gated (§9).
+`main.go` wires everything: config → verify keys → engine/hub/managers → backfill → seed
+scanner + signal engine → SIP stream loop (auto-reconnect, re-backfill) → quant block
+(only arms when `PAPER_CLAUDE_*` set; each governance piece independently flag-gated) →
+evals refresh → research loop → dip watcher → RIDP/RBT/SNDK/Breadcrumbs desks (each only
+with its OWN keys) → account poller (2–3s) → HTTP server.
 
 ---
 
-## 5. Frontend pages & components
+## 5. Frontend pages
 
-**`Portal`** — app shell. Tabs (each mounts only while selected, so DECEPTICON's scan
-stream isn't running while you trade): **Execution · Watchlist · DECEPTICON · History ·
-Metrics · Paper · Claude**, plus a global **SymbolSearch** (add any tradable US stock to
-Execution/Watchlist) and portal-wide **OrderAlerts** fill animations.
+**`Portal`** — tabs mount only while selected (DECEPTICON's scan stream isn't running
+while you trade): **Execution · Watchlist · DECEPTICON · History · Metrics · Paper ·
+Claude · RIDP**, plus global SymbolSearch and portal-wide OrderAlerts fill animations.
 
-**Paper · Claude page (`Quant.tsx`)** — read-only report of the quant desk (polls
-`/api/quant` + `/api/evals` every 5s). Shows: headline cards (realized/unrealized P&L, win
-rate, open/max, budget free); an **allocator-budget-vs-real-equity** line; a **Team P&L by
-pipeline** panel (dip vs signal vs rehydrated); the **agent roster** (each agent's ACTUAL
-configured model + live/off status — sourced from the backend so it can't drift stale); the
-**Strategy scoreboard** (rolling 20d mean-R, demotions, judge calibration); the **dip-agent
-scorecard** (approve/reject, win rate, knife rate — is Agent 2 catching bounces or knives?);
-per-exit-reason **Agent 3 attribution**; open positions; closed trades; and the latest daily
-review.
+**Execution (`App.tsx`)** — the core trading surface. Left Watchlist panel
+(drag-to-reorder, persisted) · center Chart + Positions + NewsPanel · right OrderPanel.
+`Header`: LIVE/PAPER badge, market-phase badge, feed badge, **Equity** and **Day P/L**
+marked live to streaming prices between 3s REST polls (cost basis reconstructed from
+fills in `costBasis.ts` to fix Alpaca's blended `avg_entry_price`), buying power,
+connection dot, **Cancel-all kill switch** (cancels open orders, not shares). Chart
+toolbar: signal badge, indicator toggle, RangeToggle (1m/5m/10m | 1W/1M/6M/1Y).
 
-**Execution page (`App.tsx` = `ExecutionEngine`)** — the core trading surface.
-- Layout: left **Watchlist** panel · center **Chart + Positions + NewsPanel** · right **OrderPanel**.
-- `Header`: LIVE/PAPER badge, market-phase badge (self-updating), feed badge (SIP warning),
-  **Equity** (marked live to streaming prices), **Day P/L** (unrealized, live), **Buying power**,
-  connection dot, and the **Cancel-all kill switch** (cancels open orders, not shares).
-- Left panel (`components/Watchlist.tsx`): drag-to-reorder rows (persisted), price + %
-  (blank when no live quote), `⋯` menu to move-to-watchlist / remove, company name.
-- Live equity & Day P/L are computed client-side by marking each held position to its
-  streaming price between 3s REST polls; cost basis is reconstructed from fills
-  (`costBasis.ts`) to fix Alpaca's blended `avg_entry_price`.
-- Chart toolbar: live signal badge + indicator toggle + **RangeToggle** (1m/5m/10m | 1W/1M/6M/1Y).
+**Watchlist page** — Opening-movers ranking (+15/30/45/60 min from the open) over stacked
+full-size `LiveChart`s (each opens its own WebSocket); drag `⠿` to reorder.
 
-**Watchlist page (`Watchlist.tsx`)** — **Opening movers** ranking (top gainers/fallers at
-+15/30/45/60 min from the 9:30 ET open; click a ticker to scroll to its chart; send to
-Execution / add to watchlist) over a stack of full-size **`LiveChart`** charts (each opens
-its own WebSocket). Page-level RangeToggle applies to all charts; drag the `⠿` grip to reorder.
+**DECEPTICON** — event-driven sector scanner: per-department summary cards, top movers,
+catalyst radar, `MiniChart` heatmap. Click any tile → `ChartModal` (live WS chart, any
+symbol incl. market movers). MarketMovers panel shows whole-market gainers/losers.
 
-**DECEPTICON page (`Decepticon.tsx`)** — event-driven sector scanner. Per department:
-summary cards (sector move, breadth, high-RVOL, catalyst flags), top movers, catalyst radar,
-and a heatmap of `MiniChart`s. Click any tile/card → **`ChartModal`** (a **live** WS chart
-with indicators + add-to-Exec/Watchlist). A **MarketMovers** panel shows whole-market
-screener gainers/losers; clicking a row opens the same live popup.
+**Paper · Claude (`Quant.tsx`)** — read-only quant report (polls `/api/quant` +
+`/api/evals` 5s): P&L cards, allocator budget vs real equity, team P&L by pipeline, agent
+roster (actual configured models from the backend), strategy scoreboard, dip scorecard,
+Agent-3 exit attribution, open/closed trades, daily review.
 
-**History (`TradeHistory.tsx`)** — Alpaca fill log (authoritative; selectable day window).
+**RIDP (`Ridp.tsx`)** — Rider/Dipper/Reverter desk report; open-position P&L marked live
+to the WS quote stream between 3s polls.
 
-**Metrics (`Metrics.tsx`)** — realized-P&L analytics bucketed by day/week/month from fills
-(`costBasis.ts` `realizedTrades`: average-cost, merges partial fills per sell order, resets
-on a flat position), with win rate, best/worst, and an equity-curve chart.
+**History** — Alpaca fill log (authoritative). **Metrics** — realized-P&L analytics from
+fills (`realizedTrades`: average-cost, merges partial fills, resets on flat).
 
-**Shared chart components:**
-- `Chart.tsx` — candlesticks + volume sub-pane; optional **Bollinger band** overlay and a
-  time-synced **RSI pane**; green "bought here" entry line; preserves user zoom on live
-  updates, `scrollToRealTime` on intraday view change, `fitContent` for historical ranges.
-- `OrderPanel.tsx` / `ConfirmModal.tsx` — see §8.
-- `StrategyBadge`, `RangeToggle`, `LiveChart`, `MiniChart`, `ChartModal`, `NewsPanel`
-  (buy/sell pressure meter + headlines), `Positions`, `SymbolSearch`, `LazyMount`
-  (mounts children when scrolled into view), `ErrorBoundary`.
+**`Chart.tsx`** — candles + volume; optional Bollinger overlay + time-synced RSI pane;
+green "bought here" line; preserves user zoom on live updates; `scrollToRealTime`
+intraday, `fitContent` for historical ranges.
 
 ---
 
-## 6. Indicators (Bollinger + RSI "Combo" strategy)
+## 6. Indicators (Bollinger + RSI "Combo")
 
-`indicators.ts` computes everything natively from the candle series shown:
-- **Bollinger Bands**: SMA(20) ± 2 · population stdev (matches TradingView `ta.stdev`).
-- **RSI**: Wilder's RSI(14) (matches `ta.rsi`).
-- **`grade`/`evaluate`**: per-bar signal — **STRONG** (band AND RSI agree), **WEAK** (only
-  one), **WAIT** (neither). BUY when price ≤ lower band or RSI ≤ 30; SELL when price ≥ upper
-  band or RSI ≥ 70. Rendered as `StrategyBadge` with a plain-language reason.
-
-Indicators are **display/decision aids only — they never place orders.** They apply to
-whatever series is shown, so a 1-year daily view yields 20-day bands + 14-day RSI. Toggle
-state persists in `localStorage` (`lo.indicators`).
+`indicators.ts`, computed natively from the series shown: Bollinger = SMA(20) ± 2·pop
+stdev; RSI = Wilder 14 (both match TradingView). `grade`: **STRONG** (band AND RSI agree),
+**WEAK** (one), **WAIT** (neither); BUY at ≤ lower band or RSI ≤ 30, SELL at ≥ upper band
+or RSI ≥ 70. **Display/decision aids only — they never place orders.** Toggle persists in
+`localStorage` (`lo.indicators`).
 
 ---
 
 ## 7. Real-time + on-demand streaming model
 
-**WebSocket protocol** (`/ws`, JSON `{type, data}`):
-- Client → server: `{action:"subscribe", symbol, timeframe}`,
-  `{action:"scan_subscribe"}`, `{action:"scan_unsubscribe"}`.
-- Server → client: `snapshot` (candle history on subscribe), `candle` (live update),
-  `quote` (last price, all clients), `account` / `positions` / `orders` (3s poll),
-  `trade_update` (order/fill event), `scan` (DECEPTICON snapshot), `exec_symbols` /
-  `watch_symbols` (symbol-set changes).
+**WebSocket protocol** (`/ws`, JSON `{type, data}`): client → `{action:"subscribe",
+symbol, timeframe}`, `scan_subscribe`/`scan_unsubscribe`. Server → `snapshot`, `candle`,
+`quote`, `account`/`positions`/`orders` (3s poll), `trade_update`, `scan`,
+`exec_symbols`/`watch_symbols`.
 
-**On-demand activation (additive).** When a client subscribes to a symbol the engine isn't
-tracking, `hub.EnsureLiveFn → api.EnsureLive → activateSymbol` backfills its session and
-subscribes its trades/quotes on the SIP stream, then the normal candle path streams it
-sub-second. This powers the DECEPTICON popup charting **any** symbol (incl. market movers).
-It is **additive only** — symbols stay subscribed for the session (cleared on restart), so
-there is no teardown that could disturb Execution symbols, and previewed symbols are pinned
-in `inUse()`. For already-tracked symbols `EnsureLive` is a no-op (verified: zero added
-latency on Execution).
+**On-demand activation (additive).** Subscribing to an untracked symbol triggers
+`hub.EnsureLiveFn → api.EnsureLive → activateSymbol`: backfill + live SIP subscribe, then
+the normal sub-second candle path. Additive only — symbols stay subscribed for the session
+(no teardown that could disturb Execution); already-tracked symbols are a no-op.
 
-**Per-component WebSocket.** `useWebSocket` opens a **fresh** connection per consumer, so a
-popup or stacked `LiveChart` can subscribe independently without hijacking the Execution
-chart's single-symbol subscription.
+**Per-component WebSocket.** `useWebSocket` opens a fresh connection per consumer, so
+popups and stacked charts subscribe independently of the Execution chart.
 
 ---
 
 ## 8. Order system & safety
 
-**Order kinds (frontend `OrderPanel` + chart draw-order):**
-- **Market** buy/sell — shares or dollars (notional; auto-disabled for non-fractionable
-  symbols and in extended hours).
-- **Conditional** — buy-limit (buy the dip, below market), sell-limit (take profit, above
-  market), stop-loss (below market), trailing stop (follows price up by $ or %). Marketable
-  prices are **blocked** with a direction-rule explanation.
-- **OCO** — protect a held position with a take-profit (above) + stop-loss (below); whichever
-  fills cancels the other. Whole shares only.
-- **Bracket** — buy (market or resting limit) + auto take-profit + stop-loss in one order.
-  For a LIMIT-entry bracket the TP/SL are validated against the **entry** price, not the
-  current market price. Whole shares only.
-- **Draw-order (`ChartOrderPopup`)** — click "✏ Draw order", click a price on the chart, and
-  the popup offers the contextually-valid order types (buy-stop / take-profit above; buy-limit
-  / stop-loss below). Routes through the same ConfirmModal + server validation as everything
-  else.
+**Order kinds (OrderPanel + chart draw-order):**
+- **Market** buy/sell — shares or dollars (notional auto-disabled for non-fractionable
+  symbols and extended hours).
+- **Conditional** — buy-limit (below market), sell-limit (above), stop-loss (below),
+  trailing stop ($ or %). Marketable prices are **blocked** with a direction-rule
+  explanation.
+- **OCO** — take-profit (above) + stop-loss (below) on a held position; whole shares only.
+- **Bracket** — entry (market or resting limit) + TP + SL in one; for a LIMIT-entry
+  bracket the TP/SL validate against the **entry** price. Whole shares only.
+- **Draw-order (`ChartOrderPopup`)** — click a price on the chart; the popup offers only
+  the contextually-valid order types. Same ConfirmModal + server validation as everything.
 
 **Safety guards (defense in depth):**
-1. Frontend `OrderPanel` blocks fat-fingers (direction rules, oversell, fractional-stop, cap).
-2. **Mandatory `ConfirmModal`** — LIVE-styled, with explicit **"this limit fills
-   immediately"** and **"this stop triggers immediately"** warnings when a price is on the
-   wrong side of the market.
-3. Backend `validateOrder` re-checks everything server-side; `checkSellable` rejects selling
-   more than held (no accidental shorting/overselling); `MAX_ORDER_NOTIONAL` caps order value.
-4. `PlaceOrder` is a **REST** `POST /api/orders` (request→response) — orders are never sent
-   over the market-data socket. The **kill switch** cancels all open orders (not positions).
+1. Frontend OrderPanel blocks fat-fingers (direction rules, oversell, fractional-stop, cap).
+2. **Mandatory `ConfirmModal`** — explicit "this fills immediately"/"this triggers
+   immediately" warnings when a price is on the wrong side of the market.
+3. Backend `validateOrder` re-checks everything; `checkSellable` rejects selling more than
+   held; `MAX_ORDER_NOTIONAL` caps order value.
+4. Orders go over **REST** `POST /api/orders` — never the market-data socket. The kill
+   switch cancels all open orders (not positions).
 
 ---
 
@@ -432,46 +290,58 @@ chart's single-symbol subscription.
 |-----|---------|---------|
 | `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | — | Alpaca credentials (server-only) |
 | `ALPACA_PAPER` | `false` | `true` = paper trading endpoint |
-| `ALPACA_DATA_FEED` | `sip` | `sip` (Algo Trader Plus) or `iex` (free) |
+| `ALPACA_DATA_FEED` | `sip` | `sip` (Algo Trader Plus) or `iex` |
 | `SYMBOLS` | `SNDK,SPCX,STX,NVDA,MRVL` | Base Execution symbols |
 | `MAX_ORDER_NOTIONAL` | `25000` | Per-order USD cap (0 disables) |
-| `HTTP_ADDR` | `:8080` | Backend listen address |
-| `ALLOWED_ORIGINS` | `localhost:5173` | CORS + WS origin allowlist |
-| `DECEPTICON_ENABLED` | `true` | Enable the scanner page/stream |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_RPM` / `GEMINI_DAILY_CAP` | — / `gemini-3.5-flash` / `8` / `200` | Optional movers-news summaries |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Optional dip-watcher alerts |
-| `PAPER_CLAUDE_KEY` / `PAPER_CLAUDE_SECRET` | — | SIGNAL desk's paper account (6-strategy engine + ML gate + judge) |
-| `PAPER_DIP_KEY` / `PAPER_DIP_SECRET` | — | DIP+RISE desk's paper account (Agent 2 dips + rise watcher; empty = family stays shadow) |
-| `PAPER_RIDP_KEY` / `PAPER_RIDP_SECRET` | — | RIDP desk's OWN paper account (empty = desk OFF; strict one account per desk — sharing lets desks liquidate each other's shares) |
-| `PAPER_RBT_KEY` / `PAPER_RBT_SECRET` | — | RBT desk's OWN paper account (empty = desk OFF) |
-| `PAPER_SNDK_KEY` / `PAPER_SNDK_SECRET` | — | SNDK scalper's OWN paper account (empty = benched; no fallback) |
+| `HTTP_ADDR` / `ALLOWED_ORIGINS` | `:8080` / localhost:5173 | listen addr / CORS allowlist |
+| `DECEPTICON_ENABLED` | `true` | Scanner page/stream |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_RPM` / `GEMINI_DAILY_CAP` | — / flash / 8 / 200 | Movers-news summaries |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Dip-watcher alerts |
+| `PAPER_CLAUDE_KEY/SECRET` | — | SIGNAL desk paper account |
+| `PAPER_DIP_KEY/SECRET` | — | DIP+RISE desk paper account (empty = family shadow) |
+| `PAPER_RIDP_KEY/SECRET` | — | RIDP desk account (empty = OFF; one account per desk) |
+| `PAPER_RBT_KEY/SECRET` | — | RBT desk account (empty = OFF) |
+| `PAPER_SNDK_KEY/SECRET` | — | SNDK scalper account (empty = benched) |
+| `PAPER_BREADCRUMBS_KEY/SECRET` | — | Breadcrumbs desk account (empty = OFF) |
 | `ANTHROPIC_API_KEY` | — | Quant agents (idle when empty) |
 | `CLAUDE_SYMBOLS` | `SNDK,MU` | Always-streamed quant symbols (+ SPY/QQQ) |
-| `QUANT_ENTRY_MODEL` / `QUANT_EXIT_MODEL` / `QUANT_REVIEW_MODEL` | haiku / haiku / opus | Agent models |
+| `QUANT_ENTRY_MODEL` / `QUANT_EXIT_MODEL` / `QUANT_REVIEW_MODEL` | haiku/haiku/opus | Agent models |
 | `QUANT_TRAIL_PCT` | `1.5` | Deterministic trailing-stop floor % |
-| `QUANT_EXIT_GRACE_MIN` | `10` | Mechanical grace period: Agent 3 is not consulted for a position's first N minutes (deterministic stops/target/max-hold/EOD still run); 0 = consult from the first tick |
-| `QUANT_BREAKEVEN_R` / `QUANT_CHK_HALF_R` / `QUANT_CHK_FULL_R` / `QUANT_EXIT_NOISE_R` | `0.5` / `0.75` / `0.5` / `0.25` | Mechanical exit rails in units of each trade's planned risk R: breakeven ratchet trigger; mid-grace and grace-end checkpoint loss thresholds (each also requires below-VWAP); minimum loss for an Agent 3 exit_now on a loser to be honored. 0 disables each |
-| `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only — it does NOT bench the signal desk (`QUANT_SIGNALS_LIVE`), the rise watcher flag (`QUANT_RISE_LIVE`), or RIDP; each has its own flag (2026-07 incident: the desk kept trading on QUANT_SIGNALS_LIVE's hidden default) |
-| `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position up to this value overnight (0 = flatten all) |
-| `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe file override |
-| `QUANT_SIGNALS_LIVE` | `true` | Route signal-engine entries to the paper broker (false = shadow only) |
-| `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge model |
-| `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries once day P&L ≈ −cap |
-| `QUANT_TOD_GATE` | `false` | Enforce the time-of-day gate (default shadow-only: journals verdicts, blocks nothing) |
-| `QUANT_RISE_LIVE` | `false` | Rising watcher places paper orders on confirmed post-dip rises (false = shadow: arms + journals + Telegram only) |
-| `QUANT_ALIGN_GATE` | `true` | Trend-alignment gate. Since 2026-07-16 throughput mode it blocks only proven-negative cells (the −228R mkt-up/sym-down cell + retired fh_reversal); `QUANT_ALIGN_STRICT=true` restores the original best-cell-only playbook. See THROUGHPUT_MODE.md for ALL loosened dials + rollback env overrides |
-| `RIDP_LIVE` | `true` | RIDP desk (RIDER + DIPPER, fully deterministic) places paper orders on the paper-claude account; false = shadow journaling |
-| `QUANT_CLF_GATE` | `true` | ML entry gate: nightly LightGBM classifiers reject entries with expected R < 0.03 (fail-open without fresh models) |
-| `QUANT_RETRAIN` | `true` | Auto-run `ml/train_live.py` weekdays ~17:05 ET (+ boot catch-up) to refresh the gate models |
-| `QUANT_STRATEGIST` / `QUANT_STRATEGIST_MODEL` | `true` / `claude-opus-4-8` | Pre-market posture/budget agent |
-| `RESEARCH_LOOP` | `true` | Auto-run `ml/research_loop.py` weekdays 13:30 ET → Telegram (proposals never auto-applied) |
-| `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | `localhost:11434` / `gemma2:2b` | Agent 4 sentiment (local) |
+| `QUANT_EXIT_GRACE_MIN` | `10` | Agent 3 not consulted for a position's first N min |
+| `QUANT_BREAKEVEN_R` / `QUANT_CHK_HALF_R` / `QUANT_CHK_FULL_R` / `QUANT_EXIT_NOISE_R` | `0.5/0.75/0.5/0.25` | Mechanical exit rails in R units (0 disables each) |
+| `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only (does NOT bench the signal desk or RIDP — each has its own flag) |
+| `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position overnight up to this (0 = flatten all) |
+| `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe override |
+| `QUANT_SIGNALS_LIVE` | `true` | Signal-engine entries to paper broker (false = shadow) |
+| `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge |
+| `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries at −cap |
+| `QUANT_TOD_GATE` | `false` | Time-of-day gate (default shadow-only) |
+| `QUANT_RISE_LIVE` | `false` | Rise watcher places paper orders (currently true in .env — corrective-regime slot) |
+| `QUANT_ALIGN_GATE` | `true` | Trend-alignment gate (throughput mode blocks only proven-negative cells; `QUANT_ALIGN_STRICT=true` = original playbook; see THROUGHPUT_MODE.md) |
+| `RIDP_LIVE` | `true` | RIDP desk places paper orders (false = shadow) |
+| `QUANT_CLF_GATE` | `true` | ML entry gate (fail-open without fresh models) |
+| `QUANT_CLF_MARGIN` | `0.0` | clf expected-R margin (pre-registered original 0.03) |
+| `QUANT_RETRAIN` | `true` | Nightly clf retrain ~17:05 ET + boot catch-up |
+| `QUANT_STRATEGIST` / `QUANT_STRATEGIST_MODEL` | `true` / opus | Pre-market posture/budget agent |
+| `RESEARCH_LOOP` | `true` | Daily 13:30 ET research proposals → Telegram (never auto-applied) |
+| `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | localhost:11434 / gemma2:2b | Agent 4 sentiment |
+| `QUANT_SENTIMENT` | `true` | `false` = never wire Agent 4 |
+| `BC_LIVE` | `true` | Breadcrumbs places paper orders (false = shadow) |
+| `BC_UNIVERSE` | 22-name volatile basket | Breadcrumbs basket |
+| `BC_BUDGET` / `BC_NOTIONAL` / `BC_MAX_SLOTS` | `200000/2000/0` | Budget / slice / slots (0 = one per symbol). .env currently runs notional 5000 |
+| `BC_TP_PCT` / `BC_SL_PCT` / `BC_TRAIL_PCT` / `BC_LOCK` | `.0057/.0071/.002/true` | Exit dials (must match model labels) |
+| `BC_RETRAIN` | `true` | Monthly rolling retrain + boot catch-up |
+| `BC_DAILY_LOSS_CAP` | `500` | Halt NEW breadcrumbs entries at −cap (0 = disabled; .env currently 0 by operator choice — uncapped data collection) |
+| `RBT_Z_ENTRY` | `2.0` | RBT entry stretch σ (original 2.5) |
+| `RBT_MAX_CLUSTER` | `12` | RBT family size cap |
+| `RBT_COINT_P` / `RBT_MIN_FAMILY` | `0.10` / `2` | RBT family admission (originals 0.05 / 3) |
+| `RBT_UNIVERSE_PATH` | baseline JSON | RBT curated-universe file override |
 
-Backfill always loads the full current session day per symbol (no bar-count knob).
-Persistence (all gitignored under `backend/data/`): `execution_symbols.json`,
-`watchlist_symbols.json` (added/hidden sets), `daily_universe.json`, `decisions/*.jsonl`,
-`reviews/*.json`. Browser `localStorage`: `lo.execOrder` / `lo.watchOrder` (chart reorder),
-`lo.indicators` (`on`/`off`), `lo.execAutoSort` (opening auto-sort marks).
+Backfill always loads the full current session day per symbol. Persistence under
+gitignored `backend/data/`: `execution_symbols.json`, `watchlist_symbols.json`,
+`daily_universe.json`, `decisions/*.jsonl`, `signals/`, `reviews/`, plus per-desk state
+dirs. Browser `localStorage`: `lo.execOrder`/`lo.watchOrder`, `lo.indicators`,
+`lo.execAutoSort`.
 
 ---
 
@@ -479,28 +349,18 @@ Persistence (all gitignored under `backend/data/`): `execution_symbols.json`,
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/keycheck` | keys valid + SIP entitlement |
-| GET | `/config` | symbols, mode, feed, fractionable flags, cap, decepticon_enabled (no secrets) |
+| GET | `/keycheck` · `/config` · `/readiness` | keys+SIP / public config / trading readiness |
 | GET | `/account` · `/positions` · `/orders` | account snapshot / positions / open orders |
-| POST | `/orders` | place an order (validated) |
-| DELETE | `/orders` · `/orders/{id}` | cancel all / cancel one |
-| GET/POST | `/execution/symbols` · DELETE `/execution/symbols/{symbol}` | Execution symbol set |
-| GET/POST | `/watchlist/symbols` · DELETE `/watchlist/symbols/{symbol}` | Watchlist symbol set |
-| GET | `/history?symbol&range` | static 1W/1M/6M/1Y bars (split-adjusted; any symbol) |
-| GET | `/opening-analysis?scope` | movers ranking at +5/15/30/45/60 min (watchlist or execution) |
-| GET | `/asset-names` · `/symbol-meta` | company name / name+sector (cached) |
-| GET | `/assets` · `/assets/search?q&limit` | configured assets / global stock search |
-| GET | `/movers?top` · `/movers-news?top` | screener gainers/losers / + news badges (DIP?/KNIFE) |
-| GET | `/stock-news?symbol` | headlines + background AI "why is it moving" summary |
-| GET | `/quotes` | per-symbol `{price, ref}` snapshot (seeds the left panel) |
-| GET | `/rvol?symbol` | time-of-day-aware relative volume from the scanner |
-| GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills (Metrics) |
-| GET | `/news?symbols&limit` · `/pressure?symbol` | headlines+sentiment / buy-sell pressure |
-| GET | `/readiness` | account trading-readiness gating + market clock |
-| GET | `/quant` | quant desk report: alloc, state, exit attribution, dip scorecard, agent roster, review |
-| GET | `/ridp` | RIDP desk report: open positions, budget vs live buying power, per-strategy stats, dip setups/triggers, closed trades |
-| GET | `/evals` | eval scoreboard: per-strategy rolling expectancy, demotions, judge calibration (`{enabled:false}` until first compute) |
-| GET | `/proposals` | newest research-loop `proposals_*.json`, or `{pending:[]}` |
+| POST | `/orders` · DELETE `/orders`, `/orders/{id}` | place (validated) / cancel all / one |
+| GET/POST/DELETE | `/execution/symbols[/{symbol}]` · `/watchlist/symbols[/{symbol}]` | symbol sets |
+| GET | `/history?symbol&range` | 1W/1M/6M/1Y bars (split-adjusted, any symbol) |
+| GET | `/opening-analysis?scope` | movers ranking at +5/15/30/45/60 min |
+| GET | `/asset-names` · `/symbol-meta` · `/assets` · `/assets/search?q` | names/meta/search |
+| GET | `/movers?top` · `/movers-news?top` · `/stock-news?symbol` | screener / news badges / headlines+AI summary |
+| GET | `/quotes` · `/rvol?symbol` · `/news?symbols` · `/pressure?symbol` | quotes / RVOL / news / buy-sell pressure |
+| GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills |
+| GET | `/quant` · `/evals` · `/proposals` | quant report / scoreboard / research proposals |
+| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` | per-desk reports |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
 
 ---
@@ -508,46 +368,41 @@ Persistence (all gitignored under `backend/data/`): `execution_symbols.json`,
 ## 11. Build, run, verify
 
 ```powershell
-# Backend (Go on PATH at C:\Program Files\Go\bin)
-.\scripts\check-keys.ps1            # exit 0 = keys valid + SIP entitled; 2 = no SIP; 1 = bad keys
-.\scripts\run-backend.ps1           # go run ./cmd/server  → http://localhost:8080
-# Frontend
-cd frontend; npm install            # first run
-.\scripts\run-frontend.ps1          # vite dev → http://localhost:5173 (proxies /api + /ws)
-# One-click (both, opens browser): START-Live-Optimus.bat
-# Strategy backtest (read-only market data; bars cached in data/btcache/)
-cd backend; go run ./cmd/backtest -days 21              # all strategies
-cd backend; go run ./cmd/backtest -days 63 -sweep       # momentum tune (IS) + validate (OOS)
-cd backend; go run ./cmd/backtest -days 63 -mlgate      # walk-forward ML-gate lift test
-cd backend; go run ./cmd/backtest -days 63 -dataset data/ml_dataset.jsonl  # export ML rows
+.\scripts\check-keys.ps1            # 0 = keys valid + SIP; 2 = no SIP; 1 = bad keys
+.\scripts\run-backend.ps1           # go run ./cmd/server  → :8080
+cd frontend; npm install; ..\scripts\run-frontend.ps1   # vite dev → :5173
+# One-click: START-Live-Optimus.bat
+# Strategy backtest (read-only; bars cached in data/btcache/, safe to delete):
+cd backend; go run ./cmd/backtest -days 21   # (-sweep, -mlgate, -dataset variants exist)
 ```
 
-Checks before considering a change done:
-- Backend: `go build ./...` (from `backend/`).
-- Frontend: `npx tsc --noEmit` then `npm run build` (= `tsc -b && vite build`).
-- Live smoke tests (Node 20 has a global `WebSocket`): subscribe to an Execution symbol and
-  assert the snapshot symbol matches and no foreign symbol leaks; `curl /api/history` returns
-  sane bar counts. The market data is real even when the market is closed (history backfills);
-  live ticks only flow during trading hours.
+Checks before considering a change done — backend (from `backend/`):
+`"C:\Program Files\Go\bin\go" build ./... && go vet ./... && go test ./...`; frontend:
+`npx tsc --noEmit && npm run build`. Live smoke: subscribe to an Execution symbol, assert
+the snapshot symbol matches, no foreign symbol leaks; `curl /api/history` returns sane
+counts. History works when the market is closed; live ticks only during trading hours.
 
 ---
 
 ## 12. Conventions & gotchas
 
-- **Don't break the Execution streaming/order path.** It's real money. New features should be
+- **Don't break the Execution streaming/order path.** Real money. New features are
   additive and isolated; re-verify Execution after backend stream/hub/api changes.
-- **Times are unix seconds** in candle DTOs; the ET session helpers (`sessionStartET`,
-  `sessionDayStartET`) and `marketStatus.ts` handle the trading calendar — but **holidays are
-  not modeled** (e.g. on a holiday there are no live quotes; the sidebar price is blank and
-  charts show backfilled history).
-- **lightweight-charts is v4** — no native panes; the RSI pane is a synced second chart. Daily
-  ranges call `fitContent`; intraday calls `scrollToRealTime` and preserves user zoom.
-- **Throttles** (`BroadcastCandle` 120ms, `BroadcastQuote` 150ms) are deliberate flood
-  control and are still sub-second; change them only with care.
-- **Money math**: the SDK uses `decimal`; the `alpaca` package converts to `float64` for JSON
-  at the boundary. Keep order-size logic (qty vs notional, fractional rules) intact.
-- **DECEPTICON universe** comes from `EVENT_DRIVEN_WATCHLIST.md` (parsed, not hardcoded);
-  editing that file changes the scanner's departments/tickers.
+- **Times are unix seconds** in candle DTOs; ET session helpers + `marketStatus.ts` handle
+  the calendar — **holidays are not modeled** (no live quotes on one; blank sidebar prices
+  and backfilled charts are expected, not a bug).
+- **lightweight-charts is v4** — no native panes; RSI is a synced second chart.
+- **Throttles** (candle 120ms, quote 150ms) are deliberate flood control.
+- **Money math**: SDK decimals → float64 at the JSON boundary; keep qty-vs-notional and
+  fractional rules intact.
+- **DECEPTICON universe** comes from `EVENT_DRIVEN_WATCHLIST.md` (parsed, not hardcoded).
+- **Order-lifecycle discipline (hard-won, applies to every desk):** confirm a cancel
+  before replacing an order (Alpaca cancels are async — the old order still holds the
+  shares, so an instant replacement 403s "insufficient qty available"); settle entries to
+  a TERMINAL state and book only what actually filled; a resting sell-stop must sit BELOW
+  market (if price is already at/below the stop level, flatten instead of re-placing — it
+  can only 422); cancel open orders before flattening untracked shares; never sell book
+  qty when the account holds zero (403 "not allowed to short" loop).
 - This file is documentation **and** agent guidance; keep it accurate when features change.
 
 ---
@@ -555,153 +410,140 @@ Checks before considering a change done:
 ## 13. Live AI quant team — operations & debugging playbook
 
 > **Standing golden rule:** the AI quant desk is **paper only**. Never touch the Execution
-> page or the live order path while debugging it. All fixes here are paper-side.
->
-> The complete stack (ML clf gate live, equity-aware allocator, source-tagged positions,
-> strategy-aware exit agent, dip scorecard, governance goroutines) is **newer than any
-> long-running binary** — **the backend MUST be restarted** before the first live session so
-> it actually runs this code. When bugs appear during a live test, this section is the map.
+> page or the live order path while debugging it. Restart the backend after code changes —
+> a long-running binary predates them.
 
 ### 13.1 Daily clock (all times **America/New_York**)
 
 | Time (ET) | What fires | Where |
 |---|---|---|
-| boot | clf gate load + parity check · equity sync · `Rehydrate` open positions · Strategist boot catch-up | `main.go` quant block |
-| 08:50–09:25 | **Strategist** writes `daily_universe.json` (posture + budget) | `strategist.go` |
-| 09:30–15:30 | signals fire → gauntlet → paper entries (nothing fresh after 15:30) | `signaltrader.go` |
-| every 10 min | **eval scoreboard** recompute → auto-demote/reinstate strategies | `evals.Compute` |
+| boot | clf gate load+parity · equity sync · `Rehydrate` · Strategist catch-up | `main.go` quant block |
+| 08:50–09:25 | **Strategist** writes `daily_universe.json` (posture+budget) | `strategist.go` |
+| 09:30–15:30 | signals → gauntlet → paper entries (nothing fresh after 15:30) | `signaltrader.go` |
+| every 10 min | **eval scoreboard** recompute → auto-demote/reinstate | `evals.Compute` |
 | every 60 s | allocator budget re-synced to real account equity | `qBroker.Account` |
-| 13:30–13:40 | **research loop** → Telegram (proposals, never auto-applied) | `research_loop.py` |
-| 15:55 | Manager **flattens** everything (one overnight winner ≤ cap may ride) | `manager.go` |
+| 13:30–13:40 | **research loop** → Telegram (proposals only) | `research_loop.py` |
+| 15:50–16:00 | **RBT** once-daily scan window | `rbt.go` |
+| 15:55 | quant Manager **flattens** (one overnight winner ≤ cap may ride) | `manager.go` |
 | ≥16:10 | **Reviewer** writes `data/reviews/<day>.json` | `review.go` |
-| 17:05–17:20 | **nightly retrain** (`train_live.py`) → clf gate hot-reload | `runNightlyRetrain` |
+| 17:05–17:20 | **nightly retrains**: clf gate (`train_live.py`) + RBT (`rbt_train.py`) | retrain goroutines |
 
-### 13.2 The signal-trader gauntlet (exact order — a skip is logged with its reason)
+### 13.2 The signal-trader gauntlet (exact order — every skip is journaled with a reason)
 
-`OnSignal → handle` (`signaltrader.go`): **(0)** **trend-alignment playbook**
-(`signals/alignment.go`, `QUANT_ALIGN_GATE=true` default) — each strategy trades only its
-proven (QQQ trend, stock trend) cells from the 12-month regime study (both trends = prev
-close vs SMA20 of prior daily closes, stamped on the signal at publish; unknown trends
-fail open; fh_reversal retired — no allowed cells) → **(1)** TOD gate (`EntryAllowed`) —
-only if `QUANT_TOD_GATE=true`; **default OFF/shadow** → passes → **(2)** scoreboard
-demotion (`Demoted`) — computed over **allowed-cell outcomes only** (`align_ok` on each
-outcome record), so a strategy is judged on its playbook, not on cells it can't trade →
-**(3)** **clf gate** (`Clf.Score` ≥ margin; throughput default 0.0 = any positive EV,
-`QUANT_CLF_MARGIN` overrides; pre-registered original 0.03) → **(4)** session guard
-(reject after 15:30 ET) → **(5)** posture `stand_down` → **(6)** daily loss cap (`risk.Day`)
-→ **(7)** allocator `CanFund` (slot/budget/duplicate — cheap, *before* the LLM call) →
-**(8)** **LLM judge** (veto or approve+conviction) → **(9)** cautious posture requires
-conviction ≥ 0.60 → allocator `Size/Fund` → `Manager.OpenPosition(..., EntryContext{signal})`.
-The **dip pipeline** skips steps 1–3 and 8-as-judge (it uses Agent 2 instead) but shares 4–7
-and the Manager.
-Scoreboard demotion (step 2) has a **probation fast-path** (`evals.go` `probationN`): a
-benched strategy whose last 5 counterfactual outcomes are net positive is reinstated
-immediately — a regime turn must un-bench in hours, not days (added 2026-07-09 after a
-benched dip_bounce went 4-for-4 on the first bounce day while the desk sat at zero trades).
+`OnSignal → handle`: **(0)** trend-alignment playbook (`QUANT_ALIGN_GATE`) → **(1)** TOD
+gate (only if `QUANT_TOD_GATE=true`; default shadow) → **(2)** scoreboard demotion
+(computed over allowed-cell outcomes only; probation fast-path: a benched strategy whose
+last 5 counterfactuals are net positive is reinstated immediately) → **(3)** clf gate
+(`Clf.Score ≥ QUANT_CLF_MARGIN`) → **(4)** session guard (no entries after 15:30) →
+**(5)** posture `stand_down` → **(6)** daily loss cap → **(7)** allocator `CanFund`
+(before the LLM call) → **(8)** LLM judge (veto or conviction) → **(9)** cautious posture
+requires conviction ≥ 0.60 → `Size/Fund` → `Manager.OpenPosition`. The dip pipeline skips
+1–3 and 8 (Agent 2 instead) but shares 4–7 and the Manager.
 
-### 13.3 Fail-open / fail-closed (so "not trading" is not misdiagnosed as a bug)
+### 13.3 Fail-open / fail-closed (so "not trading" isn't misdiagnosed)
 
-- **clf gate**: missing / stale (>7 days) / parity-failed models → **fails OPEN** (trades
-  ungated). "No clf rejections" can be correct — check the startup log and `clf_meta.json`.
-- **LLM judge**: `ANTHROPIC_API_KEY` empty → judge idle, entries proceed at **conviction
-  0.6** (half slice). A judge **error mid-call** → that one trade is **skipped** (fail-closed).
-- **TOD gate**: default OFF → never blocks (shadow journal only).
-- **Strategist**: LLM failure → **rules fallback** (posture from QQQ 20-day-MA state).
-- **Allocator**: if the equity sync fails, `equityCeiling` stays 0 → falls back to the
-  configured budget (no cap). Budget in effect = `min(configured, account equity)`.
+- **clf gate**: missing / stale (>7d) / parity-failed models → **fails OPEN**. Check the
+  startup log + `models/clf_meta.json`.
+- **LLM judge**: no `ANTHROPIC_API_KEY` → judge idle, entries proceed at conviction 0.6.
+  A judge error mid-call → that one trade skipped (fail-closed).
+- **Strategist**: LLM failure → rules fallback (QQQ 20-day-MA posture).
+- **Allocator**: equity sync failure → configured budget only. In effect =
+  `min(configured, account equity)`.
 
-### 13.4 Where to look (all under gitignored `backend/data/`)
+### 13.4 Where to look (gitignored `backend/data/`)
 
-- `decisions/<day>.jsonl` — **every** agent decision/order/skip/outcome. `agent` ∈
-  {`agent2_entry`, `signal_judge`, `signal_clf`, `signal_trader`, `allocator`,
-  `agent3_exit`, `pipeline`, `strategist`, `review`}. **Skip notes say WHY a signal died.**
-  Close outcomes carry `{source, pnl, win, conf, held_min}`. Each LLM call carries `tokens`.
-- `signals/<day>.jsonl` — every published signal (`type:signal`, with `tod_bucket`/
-  `tod_blocked`) + its counterfactual (`type:outcome`, `r_multiple`, `exit_reason`).
-- `signals/tod_stats.json` — decayed TOD buckets. `models/clf_meta.json` + `clf_<strat>.txt`
-  — trained gate models + parity rows (`models/history/` archives per day).
-- `evals/scoreboard.json` — rolling scoreboard. `evals/proposals_<day>.json` — pending
-  research proposals. `daily_universe.json` — today's live config; `strategist/<day>.json` —
-  its dated archive. `reviews/<day>.json` — daily report card. `btcache/*.gob` — backtest
-  bar cache (~1.2 GB; safe to delete).
+- `decisions/<day>.jsonl` — every decision/order/skip/outcome; skip notes say WHY a signal
+  died; close outcomes carry `{source,pnl,win,conf,held_min}`.
+- `signals/<day>.jsonl` — every published signal + counterfactual outcome (`r_multiple`).
+- `models/clf_meta.json` — gate models + parity rows. `evals/scoreboard.json` — rolling
+  scoreboard. `daily_universe.json` — today's live config. `reviews/<day>.json` — report
+  card. `ridp/<day>.jsonl` + `ridp/trades.jsonl` — RIDP journal. `rbt/` — models, history
+  CSVs, `signals_today.json` (mtime tells you whether the 15:50 scan ran).
+  `breadcrumbs/state.json` — trades with per-trade `prob`, `signal_px`, `entry_slip_bps`,
+  `high_px`/`low_px` attribution.
 
-### 13.5 Healthy startup log lines to grep
+### 13.5 Common failures → diagnosis
 
-`[clf-gate] loaded 6 strategy models (trained through <day>...) — parity verified` (or a
-`fail-open` line if models are missing/stale) · `quant: allocator synced to paper account
-equity` · `quant: rehydrated N open position(s)` · `signal-trader: LIVE (paper) | judge=… |
-daily loss cap $150 | TOD gate shadow-only | scoreboard demotion active` · `strategist:
-armed …` · `[signals] time-of-day stats loaded: N buckets`.
+1. **"Barely trading."** Usually normal (slots + gauntlet). Check `decisions` skip
+   reasons; rule out holiday, `stand_down`, loss cap, after 15:30, clf rejections.
+2. **"clf gate not filtering."** Models missing/stale/parity-failed → fail-open by
+   design. Retrain: `PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/train_live.py`.
+3. **Stale morning config.** `daily_universe.json` date must equal today; boot catch-up
+   fires only 08:00–15:00 ET; delete a stale file to force defaults.
+4. **Budget looks wrong.** `min(configured, account equity)`; check `/api/quant` `alloc`.
+5. **Agents idle.** `ANTHROPIC_API_KEY` empty → fallbacks (§13.3); Agent 4 needs Ollama.
+6. **Orphaned positions after restart.** `Rehydrate` re-adopts + re-stops; it SKIPS
+   positions whose newest filled buy carries a sibling desk's coid prefix
+   (`ridp_`/`rbt_`/`sndk_`/`bc_`) — on a shared account those are not ours (2026-07-13/14
+   incident).
+7. **Desks interfering.** Every desk runs ONLY on its OWN paper account; empty keys =
+   OFF. Never point two desks at one account — they liquidate each other's shares.
+8. **RBT zero-trade day.** Distinguish "scan produced 0 signals" (legitimate — check
+   `signals_today.json` content) from "scan never ran" (`live_prices.json` mtime ≠ today
+   15:50 ET — the backend was down during the once-daily window).
 
-### 13.6 Common failures → diagnosis
+### 13.6 Kill switches (`.env`, then restart)
 
-1. **"Barely trading / few trades."** Usually **normal** — signals ≠ trades (3-slot cap +
-   gauntlet; dozens of signals → a handful of trades). Check `decisions` skip reasons.
-   Also rule out: market holiday (no live ticks), `stand_down` posture, loss cap hit,
-   after 15:30 ET, or the clf gate rejecting (`signal_clf` decisions).
-2. **"clf gate not filtering."** Models missing/stale/parity-failed → fail-open. Check the
-   startup log + `clf_meta.json` `last_day` (>7 days = stale). Retrain manually:
-   `PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/train_live.py` (needs
-   `data/ml_dataset_12mo.jsonl` + the `data/signals` journal).
-3. **"Parity failed" in the log.** A LightGBM format change (the trainer patches the v4
-   header to v3 for the `leaves` reader). The gate refuses the model and fails open (safe) —
-   retrain; if it persists, the `leaves` reader and LightGBM version have diverged.
-4. **Stale morning config.** `daily_universe.json` `date` must equal today (`freshFor`).
-   Boot catch-up only fires when started 08:00–15:00 ET. Delete a stale file to force
-   `$8000/$2000/3` defaults.
-5. **Budget looks wrong.** `min(configured, account equity)`. Check `/api/quant` →
-   `alloc.{budget, configured_max, account_equity}`. A stale `daily_universe.json` can pin
-   the configured budget.
-6. **Agents idle.** `ANTHROPIC_API_KEY` empty → judge/Strategist/Reviewer fall back
-   (§13.3). Agent 4 needs a local Ollama server.
-7. **Orphaned positions after a restart.** `Rehydrate` should re-adopt + re-stop them —
-   check the startup log; it requires the paper broker enabled. It SKIPS positions whose
-   newest filled buy carries a sibling desk's coid prefix (`ridp_`/`rbt_`/`sndk_`) — on a
-   shared account those are not ours to adopt (2026-07-13/14: it adopted RIDP's reverter
-   positions, canceled their stops as "wrong-size", and Agent 3 sold them).
-8. **Paper desks interfering with each other.** Every desk runs ONLY on its OWN paper
-   account (`PAPER_CLAUDE_*` / `PAPER_RIDP_*` / `PAPER_RBT_*` / `PAPER_SNDK_*`); empty
-   keys = that desk is OFF. There is no fallback/sharing — never point two desks at one
-   account.
+`QUANT_SIGNALS_LIVE=false` · `QUANT_CLF_GATE=false` · `QUANT_ALIGN_GATE=false` ·
+`QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` · `QUANT_STRATEGIST=false` ·
+`RESEARCH_LOOP=false` · `QUANT_LIVE=false` (dip shadow) · `RIDP_LIVE=false` ·
+`BC_LIVE=false` · desk keys emptied = desk OFF.
 
-### 13.7 Kill switches for isolation (`.env`, then restart)
+### 13.7 Verify from the shell
 
-`QUANT_SIGNALS_LIVE=false` (signal engine journals only) · `QUANT_CLF_GATE=false` (drop the
-ML gate) · `QUANT_ALIGN_GATE=false` (drop the trend-alignment playbook) ·
-`QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` (re-enable TOD) ·
-`QUANT_STRATEGIST=false` · `RESEARCH_LOOP=false` · `QUANT_LIVE=false` (dip pipeline shadow).
+`curl localhost:8080/api/quant` · `/api/evals` · `/api/ridp` · `/api/rbt` · `/api/sndk` ·
+`/api/breadcrumbs` · `/api/proposals`.
 
-### 13.8 Verify from the shell
+### 13.8 ⚠ Timezone gotcha (has burned a session)
 
-`curl localhost:8080/api/quant` (report incl. dip scorecard + agent roster) ·
-`curl localhost:8080/api/evals` (scoreboard) · `curl localhost:8080/api/proposals`.
-Backend bar before any commit (from `backend/`):
-`"C:\Program Files\Go\bin\go" build ./... && go vet ./... && go test ./...`; frontend:
-`npx tsc --noEmit && npm run build`.
+**The operator's local wall clock runs AHEAD of New York (+5h).** Before concluding "the
+market is closed" / "X didn't run", convert to ET and check §13.1 — never reason from the
+local clock. Holidays are also not modeled (no live ticks on one — expected).
 
-### 13.9 ⚠ Timezone gotcha (this has burned a past session)
-
-**The operator's local wall clock runs AHEAD of New York.** Before concluding "the market is
-closed" / "the Strategist didn't run" / "nothing traded", **convert to ET** and check against
-§13.1 — do NOT reason from the local clock. The engine can be live and journaling while the
-local time makes it look like off-hours. Holidays are also not modeled: on a US market
-holiday there are no live ticks (blank prices, backfilled charts) — expected, not a bug.
-
-### 13.10 Two-desk reminder (since 2026-07-16)
+### 13.9 Two-desk reminder
 
 The quant team is **two desks on two paper accounts**, each with its own allocator
-($8k, equity-capped to its own account), its own Manager (stops/Agent 3/EOD flatten),
-its own Rehydrate, and its own $150/day loss cap:
+(equity-capped), Manager (stops/Agent 3/EOD flatten), Rehydrate, and $150/day loss cap:
+**dip+rise desk** (`PAPER_DIP_*`: Agent 2 dips + rise watcher, gated by `QUANT_LIVE` /
+`QUANT_RISE_LIVE`) and **signal desk** (`PAPER_CLAUDE_*`: 6-strategy engine → clf gate →
+judge, gated by `QUANT_SIGNALS_LIVE`). Shared and stateless across both: Agent 3, Agent 4,
+Strategist, scoreboard, Reviewer. Attribute P&L per pipeline via source tags; per desk via
+the report's `desks` array (broker-level truth).
 
-- **Dip+rise desk** (`PAPER_DIP_*` account): **Agent 2** (dip pipeline, from Telegram dip
-  alerts, no ML gate) + the **rising watcher** (`risewatch.go`, deterministic confirmed
-  post-dip rises, source tag `rise`, gated by `QUANT_RISE_LIVE`). `QUANT_LIVE` gates the
-  dip entries. Empty `PAPER_DIP_*` keys = the whole family stays shadow.
-- **Signal desk** (`PAPER_CLAUDE_*` account): the 6-strategy engine → clf gate → **Signal
-  Judge**, gated by `QUANT_SIGNALS_LIVE`.
+---
 
-Shared and stateless across both: Agent 3 (exit brain), Agent 4, Strategist (its daily
-posture/budget configures BOTH allocators), scoreboard, Reviewer (reads the MERGED state
-of both accounts). Attribute P&L per pipeline via the source tags (`decisions` outcomes
-and `/api/quant` `dip_score`), and per desk via the report's `desks` array (broker-level,
-unarguable).
+## 14. Independent paper scalper desks (current state, 2026-07-20)
+
+All paper-only, one Alpaca paper account each, zero contact with the live path.
+
+- **Breadcrumbs** (`internal/breadcrumbs`): 22-name volatile basket, pooled LightGBM
+  scalper — 9 scale-free features → prob≥0.65 + Close>EMA100 + ≤2σ-VWAP gates → 0.2%
+  trail locked at the +0.57% target, −0.71% hard stop, EOD flat; monthly rolling retrain.
+  Hardened 2026-07-20 after a −$1,216 first live day: **completed-bar scoring** (the
+  forming bar is cut before scoring — scoring the seconds-old stub fired phantom
+  entries), confirmed-cancel stop ratchets, underwater-stop → flatten, terminal-state
+  fill settlement, **5-min re-entry cooldown** (the post-stop bounce fades ~minute 5),
+  **bench after 2 losing stop-outs/day**, daily loss cap (env; currently 0 = off for
+  data collection), per-trade attribution (`prob`, `signal_px`, `entry_slip_bps`,
+  MFE/MAE watermarks). Walk-forward Jul 6–20: the dials turn −$2,409 into +$758
+  @2bp/side, but the raw edge is regime-compressed — treat as a measurement desk, not an
+  earner. A 5-min time exit was tested the same way and REJECTED.
+- **RBT** (`internal/rbt`): daily-bar pairs/spread mean reversion. Universe = **199
+  liquid names** (legacy 100 ∪ curated baseline; single source `ml/rbt_universe.py`,
+  mirrored in `main.go`; deliberately NOT the 534-name throughput file — the desk shorts,
+  and 500+ names turn the cointegration screen into noise). Family admission p<0.10 +
+  pairs allowed (the old 0.05/min-3 left only 24 tradable names ≈ 2 candidates/day — its
+  zero-trade history was starvation, not breakage). Scans ONCE daily 15:50–16:00 ET;
+  prices the universe via one REST snapshot (`SetDaySnapFn`) so universe size adds
+  nothing to the SIP stream; streams only HELD positions. Entry `|z_spread| ≥ 2.0`, LGBM
+  prob ranks the top-5 slots; 1.5×ATR stop; nightly retrain 17:05 (45-min timeout).
+- **SNDK** (`internal/sndk`): single-name 1-min scalper (±$8 exits, 5-min time exit,
+  qty 2). Hardened 2026-07-20 against phantom exits: exits sell the FULL account qty,
+  confirm `PositionQty`==0 before clearing the book, and a per-cycle **orphan sweep**
+  flattens untracked shares (canceling resting orders first). The 4-day ~32-share ghost
+  pile was cleaned by the sweep on 2026-07-20; equity==cash again.
+- **RIDP** (`internal/ridp`): see §3 — REVERTER observation week in progress (unfiltered
+  live −$2,209 over 3 sessions; the 3 designed filters replay to −$300; decision after
+  the week per REVERTER_FILTERS.md). Known open ops issues, deliberately parked with that
+  decision: protective stops sized to requested-not-filled qty (268 UNPROTECTED events on
+  07-20) and ghost flattens that don't cancel resting orders first (64 failures 07-20).
