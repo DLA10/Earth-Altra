@@ -670,6 +670,9 @@ func main() {
 			ridpMgr.SetVolumeProfiles(profs)
 		}()
 		ridpMgr.Start(ctx)
+		// Shadow Guardian: log-only P&L overseer (desk-stop / ratchet / lock / cascade /
+		// bench counterfactuals for the Friday decision). Cannot trade by construction.
+		ridp.NewGuardian(ridpBroker, engine, etzRidp, "data").Start(ctx)
 		srv.Ridp = func() interface{} { return ridpMgr.Report() }
 	} else {
 		log.Printf("ridp: disabled (no PAPER_RIDP keys — strict one account per desk)")

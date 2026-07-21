@@ -556,7 +556,10 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   a validated short-window "early mode" covers ~10:05–11:29 under C2's book, journal
   tag `early:`), per-variant trails (C2 1.5→0.5% · C1 2.5→1.0% · SPECTRAL 3.5→2.0% —
   exit study in SURGER_V2.md), EOD flat 15:55, 3 books + journal in `data/surger/`.
-- **RIDP** (`internal/ridp`): see §3 — REVERTER observation week in progress (unfiltered
+- **RIDP** (`internal/ridp`): shadow **Guardian** since 2026-07-21 — log-only P&L
+  overseer (desk-stop/ratchet/lock/cascade/bench counterfactuals →
+  `data/ridp/guardian_<day>.jsonl`, cannot trade by construction) feeding the Friday
+  filter decision. See §3 — REVERTER observation week in progress (unfiltered
   live −$2,209 over 3 sessions; the 3 designed filters replay to −$300; decision after
   the week per REVERTER_FILTERS.md). Known open ops issues, deliberately parked with that
   decision: protective stops sized to requested-not-filled qty (268 UNPROTECTED events on
