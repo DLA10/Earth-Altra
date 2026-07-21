@@ -103,6 +103,7 @@ backend/
                             RIDP_REVERTER_FIXES.md
     rbt/                    RBT pairs/mean-reversion paper desk (see §14)
     sndk/                   SNDK 1-min micro-scalper paper desk (see §14)
+    surger/                 SURGER v2: 3 continuation detectors on the dip+rise account (§14)
     breadcrumbs/            generalized volatility-scalper paper desk (see §14)
     risk/                   deterministic guardrails (loss cap, sizing, concurrency) — paper only
     signals/                multi-strategy intraday signal engine + backtester (paper/shadow)
@@ -332,6 +333,7 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `BC_TP_PCT` / `BC_SL_PCT` / `BC_TRAIL_PCT` / `BC_LOCK` | `.0057/.0071/.002/true` | Exit dials (must match model labels) |
 | `BC_RETRAIN` | `true` | Monthly rolling retrain + boot catch-up |
 | `BC_DAILY_LOSS_CAP` | `500` | Halt NEW breadcrumbs entries at −cap (0 = disabled; .env currently 0 by operator choice — uncapped data collection) |
+| `SURGER_LIVE` / `SURGER_NOTIONAL` / `SURGER_SLOTS` | `true/5000/5` | SURGER lab on the DIP account (slice USD / slots per variant) |
 | `RBT_Z_ENTRY` | `2.0` | RBT entry stretch σ (original 2.5) |
 | `RBT_MAX_CLUSTER` | `12` | RBT family size cap |
 | `RBT_COINT_P` / `RBT_MIN_FAMILY` | `0.10` / `2` | RBT family admission (originals 0.05 / 3) |
@@ -360,7 +362,7 @@ dirs. Browser `localStorage`: `lo.execOrder`/`lo.watchOrder`, `lo.indicators`,
 | GET | `/quotes` · `/rvol?symbol` · `/news?symbols` · `/pressure?symbol` | quotes / RVOL / news / buy-sell pressure |
 | GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills |
 | GET | `/quant` · `/evals` · `/proposals` | quant report / scoreboard / research proposals |
-| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` | per-desk reports |
+| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` · `/surger` | per-desk reports |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
 
 ---
@@ -474,7 +476,7 @@ requires conviction ≥ 0.60 → `Size/Fund` → `Manager.OpenPosition`. The dip
 5. **Agents idle.** `ANTHROPIC_API_KEY` empty → fallbacks (§13.3); Agent 4 needs Ollama.
 6. **Orphaned positions after restart.** `Rehydrate` re-adopts + re-stops; it SKIPS
    positions whose newest filled buy carries a sibling desk's coid prefix
-   (`ridp_`/`rbt_`/`sndk_`/`bc_`) — on a shared account those are not ours (2026-07-13/14
+   (`ridp_`/`rbt_`/`sndk_`/`srg*`) — on a shared account those are not ours (2026-07-13/14
    incident).
 7. **Desks interfering.** Every desk runs ONLY on its OWN paper account; empty keys =
    OFF. Never point two desks at one account — they liquidate each other's shares.
@@ -542,6 +544,14 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   confirm `PositionQty`==0 before clearing the book, and a per-cycle **orphan sweep**
   flattens untracked shares (canceling resting orders first). The 4-day ~32-share ghost
   pile was cleaned by the sweep on 2026-07-20; equity==cash again.
+- **SURGER** (`internal/surger`): 3 intraday continuation detectors (C2 cusum / C1
+  purity / SPECTRAL) over the 534-name quant universe, deployed 2026-07-21. The ONE
+  deliberate shared-account exception: runs on the DIP+RISE paper account with strict
+  `srg1_/srg2_/srg3_` coid attribution (quant Rehydrate skips `srg*`; dip P&L keys off
+  `QuantDip__`); enters only symbols the account holds zero of. Completed-bar signals,
+  RTH-only feature windows, entries 10:00–15:30 ET (warm-up means nothing fires before
+  ~11:30), per-variant trails (C2 1.5→0.5% · C1 2.5→1.0% · SPECTRAL 3.5→2.0% — exit
+  study in SURGER_V2.md), EOD flat 15:55, 3 separate books + journal in `data/surger/`.
 - **RIDP** (`internal/ridp`): see §3 — REVERTER observation week in progress (unfiltered
   live −$2,209 over 3 sessions; the 3 designed filters replay to −$300; decision after
   the week per REVERTER_FILTERS.md). Known open ops issues, deliberately parked with that

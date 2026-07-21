@@ -29,10 +29,13 @@ Shared quality core ("composite"): `efficiency(30m) ≥ 0.55` ∧ `up-volume sha
    (no composite — the standalone corroborator).
 
 **Execution (all three):** completed bars only (stream bars arrive after minute close) ·
-entries 10:00–15:30 ET · market buy on signal, exchange stop at −3.5% · trail 3.5% below
-peak, tightening to 2.0% once peak ≥ +3.5% (confirmed-cancel ratchets) · EOD flat 15:55 ·
-one position/symbol across ALL variants + the whole account (exclusivity), 30-min
-re-entry cooldown, 5 slots/variant, $5k slices.
+entries 10:00–15:30 ET · market buy on signal, exchange trailing stop (confirmed-cancel
+ratchets) · EOD flat 15:55 · one position/symbol across ALL variants + the whole account
+(exclusivity), 30-min re-entry cooldown, 5 slots/variant, $5k slices.
+
+**Per-variant exits (since 2026-07-21, see Exit study below):** C2 trails 1.5% below
+peak → 0.5% once peak ≥ +1.5% · C1 trails 2.5% → 1.0% once ≥ +2.5% · SPECTRAL trails
+3.5% → 2.0% once ≥ +3.5% (the original RIDER-validated exit).
 
 ## Validation record (four windows, 97 sessions, $1.5k harness slices)
 
@@ -45,8 +48,20 @@ re-entry cooldown, 5 slots/variant, $5k slices.
 
 Honest expectations: long-run WR ≈ 53–55%, worst backtested day −$122, profits skew
 toward storm days; flat weeks are normal and cost nothing. The slot-5 cap *improved*
-results. The user's tight exit (1%→0.2%) was tested three times and always lost to the
-wide trail on these entries.
+results. (The validation above ran on the original 3.5%→2.0% exit for all variants.)
+
+## Exit study (2026-07-21) — per-variant trails adopted
+
+Same 97 sessions, 5-slot sim, identical entries; only the exit varied. A = 3.5%→2.0%
+@+3.5% (original), B = 1.5%→0.5% @+1.5% (operator proposal), C = 2.5%→1.0% @+2.5%.
+Totals @2bp/side: **C2** A $562 / **B $740** / C $569 (B won 3/4 windows incl. the
+pre-registered Mar–Apr check, $337 vs $179) · **C1** A $439 / B $513 / **C $561** (C
+never worst in any window) · **SPECTRAL** **A $626** / B $421 / C $578 (its slow
+grinders need room). Decision: each variant runs the exit its data earned (B/C/A).
+Caveats on file: tight trails lost for ALL variants in the choppy May window (regime
+sensitivity), and the sim fills stops at the stop price — real fills on a 0.5% trail
+run slightly worse, so live C2 results should be read against the B row with that
+discount in mind. Full tables: scratchpad `exit_compare_results.json`.
 
 ## Shared-account safety (this desk does NOT own its account)
 

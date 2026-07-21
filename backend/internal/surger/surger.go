@@ -33,14 +33,24 @@ import (
 )
 
 const (
-	trailWide    = 0.035
-	trailTight   = 0.020
-	tightenAt    = 0.035
 	ratchetMinUp = 1.0015 // move the stop only for a >=0.15% improvement (order-churn bound)
 	entryFromMin = 10 * 60
 	entryToMin   = 15*60 + 30
 	eodFlatMin   = 15*60 + 55
 	cooldownMin  = 30
+)
+
+// Per-variant exit dials (indexed C2, C1, SPECTRAL). Exit study 2026-07-21 over the same
+// 97 sessions (Mar 1 - Jul 20, 5-slot sim, @2bp): C2 earns most on the tight leash
+// (1.5%->0.5%, won 3/4 windows incl. the pre-registered Mar-Apr check, $740 vs $562),
+// C1 on the middle (2.5%->1.0%, $561, never worst in any window), SPECTRAL needs room
+// (3.5%->2.0%, $626 vs $421 tight — its slow grinders get clipped by a short leash).
+// Tight trails lose in choppy tape for ALL variants (May window) — regime caveat on file
+// in SURGER_V2.md.
+var (
+	trailWide  = [NumVariants]float64{0.015, 0.025, 0.035} // stop = peak*(1-trailWide)
+	trailTight = [NumVariants]float64{0.005, 0.010, 0.020} // once peak >= entry*(1+tightenAt)
+	tightenAt  = [NumVariants]float64{0.015, 0.025, 0.035}
 )
 
 // Position is one open variant position with full exit + attribution state.
@@ -151,8 +161,11 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 	m.settleInflightBoot()
 	m.rehydrate()
-	log.Printf("surger: started LIVE(paper, dip+rise account) — 3 variants, $%.0f/slice, %d slots each, universe %d",
-		m.notional, m.slots, len(m.universe))
+	log.Printf("surger: started LIVE(paper, dip+rise account) — 3 variants, $%.0f/slice, %d slots each, universe %d, exits C2 %.1f%%→%.1f%% | C1 %.1f%%→%.1f%% | SPECTRAL %.1f%%→%.1f%%",
+		m.notional, m.slots, len(m.universe),
+		trailWide[VarC2]*100, trailTight[VarC2]*100,
+		trailWide[VarC1]*100, trailTight[VarC1]*100,
+		trailWide[VarSpectral]*100, trailTight[VarSpectral]*100)
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
@@ -304,7 +317,7 @@ func (m *Manager) enter(vi int, sym string, signalPx float64) {
 		price = signalPx
 	}
 
-	stopPx := round2(price * (1 - trailWide))
+	stopPx := round2(price * (1 - trailWide[vi]))
 	sc := fmt.Sprintf("%s_%s_stop_%d", VariantCoid[vi], sym, time.Now().UnixNano())
 	stopID, sErr := m.broker.StopSell(sym, fq, stopPx, sc)
 	if sErr != nil {
@@ -332,7 +345,7 @@ func (m *Manager) enter(vi int, sym string, signalPx float64) {
 		if rem := fq - xq; rem >= 1 {
 			m.books[vi].Open[sym] = &Position{ // naked remainder — tick retries the flatten
 				Variant: vi, Symbol: sym, Qty: rem, EntryPrice: price, OpenedAt: time.Now(),
-				Peak: price, StopPx: round2(price * (1 - trailWide)),
+				Peak: price, StopPx: round2(price * (1 - trailWide[vi])),
 				SignalPx: signalPx, HighPx: price, LowPx: price,
 			}
 			m.journalLocked(vi, "warn", sym, fmt.Sprintf("safety flatten confirmed %.0f/%.0f — tracking naked remainder %.0f", xq, fq, rem))
@@ -369,9 +382,9 @@ func (m *Manager) manageBarLocked(vi int, p *Position, close, high, low float64)
 	if high > p.Peak {
 		p.Peak = high
 	}
-	trail := trailWide
-	if p.Peak >= p.EntryPrice*(1+tightenAt) {
-		trail = trailTight
+	trail := trailWide[vi]
+	if p.Peak >= p.EntryPrice*(1+tightenAt[vi]) {
+		trail = trailTight[vi]
 	}
 	desired := round2(p.Peak * (1 - trail))
 	if desired > p.StopPx*ratchetMinUp && desired < close {
