@@ -42,6 +42,7 @@ import (
 	"live-optimus/backend/internal/scanner"
 	"live-optimus/backend/internal/signals"
 	"live-optimus/backend/internal/sndk"
+	"live-optimus/backend/internal/surger"
 	"live-optimus/backend/internal/watchlist"
 )
 
@@ -214,11 +215,29 @@ func main() {
 			len(uni.Symbols()), len(uni.Context()), len(signals.DefaultStrategies()))
 	}
 
+	// SURGER v2 lab: three continuation detectors (C2 cusum / C1 purity / SPECTRAL),
+	// validated over four backtest windows (SURGER_V2.md), trading LIVE paper on the
+	// DIP+RISE account with srg*_ coid attribution. Additive bar consumer off the same
+	// SIP stream (completed bars only — no forming-bar skew). Symbol exclusivity keeps
+	// it from ever touching a dip+rise position; quant Rehydrate skips srg* coids.
+	var srgMgr *surger.Manager
+	if cfg.PaperDipKey != "" && cfg.PaperDipSecret != "" && len(sigSymbols) > 0 && cfg.SurgerLive {
+		srgBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperDipKey, cfg.PaperDipSecret)
+		etzSrg, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzSrg = time.UTC
+		}
+		srgMgr = surger.New(srgBroker, etzSrg, "data", true, sigSymbols, cfg.SurgerNotional, cfg.SurgerSlots)
+		srgMgr.Start(ctx)
+	} else {
+		log.Printf("surger: disabled (needs PAPER_DIP keys + signal universe + SURGER_LIVE)")
+	}
+
 	// Start the single SIP stream (reconnect on failure). On each (re)connect it
 	// subscribes trades/quotes for the current execution symbols (base + added) and
 	// bars for the union of execution + scan + signal universes, so added symbols
 	// survive reconnects.
-	go runStream(ctx, client, execMgr, watchMgr, scanSymbols, paperSymbols, sigSymbols, engine, scn, sigEngine, h, flowTracker)
+	go runStream(ctx, client, execMgr, watchMgr, scanSymbols, paperSymbols, sigSymbols, engine, scn, sigEngine, srgMgr, h, flowTracker)
 
 	// Periodically push account + positions + open orders to clients. A trade update
 	// (fill/cancel/etc.) signals refreshCh to refresh immediately instead of waiting
@@ -582,6 +601,9 @@ func main() {
 	h.EnsureLiveFn = srv.EnsureLive
 
 	srv.Quant = quantEngine
+	if srgMgr != nil {
+		srv.Surger = func() interface{} { return srgMgr.Report() }
+	}
 	srv.Evals = evalsFn
 
 	// Sub-second position P&L on the quant pages: subscribe each desk position's
@@ -799,7 +821,7 @@ func runKeycheck(client *alpaca.Client) {
 	fmt.Println("\nRESULT: keys valid AND SIP / Algo Trader Plus is ACTIVE.")
 }
 
-func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *execsym.Manager, scanSymbols, paperSymbols, sigSymbols []string, engine *candles.Engine, scn *scanner.Scanner, sigEngine *signals.Engine, h *hub.Hub, fl *flow.Tracker) {
+func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *execsym.Manager, scanSymbols, paperSymbols, sigSymbols []string, engine *candles.Engine, scn *scanner.Scanner, sigEngine *signals.Engine, srgMgr *surger.Manager, h *hub.Hub, fl *flow.Tracker) {
 	handlers := alpaca.StreamHandlers{
 		OnTrade: func(symbol string, t time.Time, price, size float64) {
 			engine.OnTrade(symbol, t, price, size)
@@ -814,6 +836,9 @@ func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *ex
 			}
 			if sigEngine != nil {
 				sigEngine.OnBar(symbol, t, o, hi, lo, c, v)
+			}
+			if srgMgr != nil {
+				srgMgr.OnBar(symbol, t, o, hi, lo, c, v)
 			}
 		},
 		OnQuote: func(symbol string, bid, ask float64, t time.Time) {

@@ -266,7 +266,9 @@ var openOrderStatuses = map[string]bool{
 // sibling desk sharing this account — it is NOT ours to adopt, re-stop, or flatten.
 // (2026-07-13/14 incident: Rehydrate adopted RIDP's reverter positions, canceled their
 // exchange stops as "wrong-size", and Agent 3 sold them minutes later.)
-var foreignDeskPrefixes = []string{"ridp_", "rbt_", "sndk_"}
+// "srg" covers srg1_/srg2_/srg3_ — the SURGER v2 lab, which SHARES the dip+rise
+// account by design (its books stay separate via these prefixes).
+var foreignDeskPrefixes = []string{"ridp_", "rbt_", "sndk_", "srg"}
 
 func foreignDeskOrder(coid string) bool {
 	for _, p := range foreignDeskPrefixes {

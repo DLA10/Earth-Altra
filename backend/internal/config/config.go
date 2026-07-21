@@ -90,6 +90,11 @@ type Config struct {
 	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
 	PaperDipKey    string
 	PaperDipSecret string
+	// SURGER v2 lab: three validated continuation detectors trading live paper on the
+	// dip+rise account with srg*_ coid attribution (see SURGER_V2.md).
+	SurgerLive     bool    // run the SURGER lab (needs PAPER_DIP keys)
+	SurgerNotional float64 // per-trade slice USD
+	SurgerSlots    int     // max concurrent positions PER VARIANT
 
 	// Anthropic key for the quant agents (entry/exit/review). Empty = agents stay idle.
 	AnthropicAPIKey string
@@ -214,6 +219,9 @@ func Load() (*Config, error) {
 		BreadcrumbsLossCap:     envFloat("BC_DAILY_LOSS_CAP", 500),
 		PaperDipKey:            strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
 		PaperDipSecret:         strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
+		SurgerLive:             envBool("SURGER_LIVE", true),
+		SurgerNotional:         envFloat("SURGER_NOTIONAL", 5000),
+		SurgerSlots:            int(envFloat("SURGER_SLOTS", 5)),
 
 		AnthropicAPIKey:      strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
 		ClaudeSymbols:        splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
