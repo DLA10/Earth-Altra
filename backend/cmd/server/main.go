@@ -246,6 +246,26 @@ func main() {
 			etzRg = time.UTC
 		}
 		regimeDet = regime.New(engine, etzRg, "data", surgerSymbols)
+		// Official 1-min bars via batched REST — the engine only carries the ~40
+		// trade-subscribed names, not the 534-name universe the probes need (the
+		// 2026-07-22 first live run died with "only 44 symbols with morning bars").
+		regimeDet.SetBarsFn(func(symbols []string, start, end time.Time) map[string][]candles.Candle {
+			hist, herr := client.GetMultiIntradayBars(symbols, start, end)
+			if herr != nil {
+				log.Printf("regime: bar fetch failed: %v", herr)
+				return nil
+			}
+			out := make(map[string][]candles.Candle, len(hist))
+			for sym, bars := range hist {
+				cs := make([]candles.Candle, 0, len(bars))
+				for _, b := range bars {
+					cs = append(cs, candles.Candle{Time: b.Time.Unix(), Open: b.Open,
+						High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume})
+				}
+				out[sym] = cs
+			}
+			return out
+		})
 		regimeDet.Start(ctx)
 	}
 

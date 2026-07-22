@@ -82,6 +82,16 @@ Jul −251** — lumpy; the direction accuracy is the stable part, the probe dol
 No desk consumes it. Promotion condition (operator decision later): ≥60% live hit rate
 over ≥2 weeks → candidate gate for REVERTER afternoons + trail on/off.
 
+Day-1 note (2026-07-22): the first live prediction FAILED — "only 44 symbols with
+morning bars". The detector read the candle engine, which only carries trade-subscribed
+execution/watchlist names, not the 534-name universe the probes were validated on.
+Fixed same day: probes now pull official 1-min bars via one batched REST call
+(`SetBarsFn` → `GetMultiIntradayBars`), the study's exact data source; engine remains a
+fallback. Offline recomputation of the missed day: prediction TREND (M_am −54 vs R_am
+−78); REVERTER's actual afternoon was −$389 by 14:10 — the call would have been
+supportive. Live ledger effectively starts 07-23; the offline day is documentation,
+not a ledger entry.
+
 ## The meta-lesson (unchanged, now leak-proofed)
 
 Zero-parameter empiricism beat logistic, LightGBM, GRU, HMM, and a Hawkes proxy — the

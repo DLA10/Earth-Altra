@@ -33,12 +33,23 @@ type Detector struct {
 	etz    *time.Location
 	dir    string
 	syms   []string
+	barsFn BarsFn
 
 	day      string
 	predDone bool
 	outDone  bool
 	pred     int // -1 unknown, 0 chop, 1 trend
 }
+
+// BarsFn fetches official 1-min bars for many symbols in [start, end). The live candle
+// engine only carries the ~40 trade-subscribed execution/watchlist names — nowhere near
+// the 534-name universe the probes were validated on (2026-07-22: the first live
+// prediction died with "only 44 symbols with morning bars") — so the REST multi-bar
+// endpoint is the primary source; the engine path below remains as a fallback.
+type BarsFn func(symbols []string, start, end time.Time) map[string][]candles.Candle
+
+// SetBarsFn wires the REST bar source; call before Start.
+func (d *Detector) SetBarsFn(fn BarsFn) { d.barsFn = fn }
 
 func New(engine *candles.Engine, etz *time.Location, dataDir string, syms []string) *Detector {
 	return &Detector{engine: engine, etz: etz, dir: filepath.Join(dataDir, "regime"),
@@ -85,12 +96,24 @@ func (d *Detector) cycle() {
 	}
 }
 
-// grids builds RTH minute grids (close ffilled; o/h/l raw) from engine snapshots,
-// using bars strictly BEFORE minute uptoMin of the given ET day.
+// grids builds RTH minute grids (close ffilled; o/h/l raw) using bars strictly BEFORE
+// minute uptoMin of the given ET day. Source: one batched REST fetch when barsFn is
+// wired (the validated path), else per-symbol engine snapshots.
 func (d *Detector) grids(day string, uptoMin int) map[string]*grid {
-	out := make(map[string]*grid, len(d.syms))
-	for _, sym := range d.syms {
-		bars := d.engine.Snapshot(sym, 1)
+	src := make(map[string][]candles.Candle, len(d.syms))
+	if dayT, err := time.ParseInLocation("2006-01-02", day, d.etz); d.barsFn != nil && err == nil {
+		endMin := uptoMin
+		if endMin > 960 {
+			endMin = 960
+		}
+		src = d.barsFn(d.syms, dayT.Add(570*time.Minute), dayT.Add(time.Duration(endMin)*time.Minute))
+	} else {
+		for _, sym := range d.syms {
+			src[sym] = d.engine.Snapshot(sym, 1)
+		}
+	}
+	out := make(map[string]*grid, len(src))
+	for sym, bars := range src {
 		if len(bars) == 0 {
 			continue
 		}
