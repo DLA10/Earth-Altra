@@ -105,3 +105,11 @@ func (s *Server) regimeReport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": true, "report": s.Regime()})
 }
+
+func (s *Server) moverWatchReport(w http.ResponseWriter, r *http.Request) {
+	if s.MoverWatch == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": true, "report": s.MoverWatch()})
+}

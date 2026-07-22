@@ -38,9 +38,10 @@ import (
 	"live-optimus/backend/internal/quant"
 	"live-optimus/backend/internal/rbt"
 	"live-optimus/backend/internal/ridp"
+	"live-optimus/backend/internal/moverwatch"
+	"live-optimus/backend/internal/regime"
 	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
-	"live-optimus/backend/internal/regime"
 	"live-optimus/backend/internal/signals"
 	"live-optimus/backend/internal/sndk"
 	"live-optimus/backend/internal/surger"
@@ -172,6 +173,28 @@ func main() {
 			go seedScanner(client, scn, wl.Symbols)
 			go runScanBroadcaster(ctx, scn, h)
 		}
+	}
+
+	// Shadow Movers recorder (operator request 2026-07-22): re-derives the Risers
+	// table server-side and journals green-signal names' prices every 15 min,
+	// 09:45–16:00 ET → data/moverwatch/<day>.jsonl. Log-only; no orders, no UI change.
+	var moverRec *moverwatch.Recorder
+	if scn != nil {
+		etzMw, merr := time.LoadLocation("America/New_York")
+		if merr != nil {
+			etzMw = time.UTC
+		}
+		moverRec = moverwatch.New(scn, etzMw, "data", func() map[string]bool {
+			own := map[string]bool{}
+			for _, s := range execMgr.All() {
+				own[s] = true
+			}
+			for _, s := range watchMgr.All() {
+				own[s] = true
+			}
+			return own
+		})
+		moverRec.Start(ctx)
 	}
 
 	// Order-flow tracker: estimates buyer/seller-initiated volume from trades + quotes.
@@ -642,6 +665,9 @@ func main() {
 	}
 	if regimeDet != nil {
 		srv.Regime = func() interface{} { return regimeDet.Report() }
+	}
+	if moverRec != nil {
+		srv.MoverWatch = func() interface{} { return moverRec.Report() }
 	}
 	srv.Evals = evalsFn
 

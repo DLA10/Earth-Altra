@@ -93,6 +93,8 @@ backend/
     flow/                   buy/sell order-flow estimator (quote rule)
     gemini/                 rate/budget-capped Gemini client ("why is it moving" summaries)
     hub/                    WebSocket fan-out, per-client (symbol,timeframe) subscription
+    moverwatch/             SHADOW recorder: Movers "Risers" table + green-signal price
+                            series at 15-min marks 09:45–16:00 ET (log-only, no orders)
     quant/                  AI quant pipelines: signal desk + dip/rise desk (see §13)
     ridp/                   RIDP deterministic paper desk: RIDER + DIPPER + REVERTER, no
                             LLM on the trade path, own journal under data/ridp/. REVERTER
@@ -362,7 +364,7 @@ dirs. Browser `localStorage`: `lo.execOrder`/`lo.watchOrder`, `lo.indicators`,
 | GET | `/quotes` · `/rvol?symbol` · `/news?symbols` · `/pressure?symbol` | quotes / RVOL / news / buy-sell pressure |
 | GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills |
 | GET | `/quant` · `/evals` · `/proposals` | quant report / scoreboard / research proposals |
-| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` · `/surger` | per-desk reports |
+| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` · `/surger` · `/regime` · `/moverwatch` | per-desk / shadow reports |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
 
 ---

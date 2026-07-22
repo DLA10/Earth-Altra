@@ -87,6 +87,9 @@ type Server struct {
 	// Regime returns the shadow regime-detector report (nil-safe; set by main).
 	Regime func() interface{}
 
+	// MoverWatch returns the shadow Risers-table recorder's daily report (nil = off).
+	MoverWatch func() interface{}
+
 	// movers-news badge cache (Alpaca-only, cheap): short TTL keeps the board snappy.
 	mnMu   sync.Mutex
 	mnResp *MoversNews
@@ -248,6 +251,7 @@ func (s *Server) Routes(r chi.Router) {
 	r.Get("/api/breadcrumbs", s.breadcrumbsReport)
 	r.Get("/api/surger", s.surgerReport)
 	r.Get("/api/regime", s.regimeReport)
+	r.Get("/api/moverwatch", s.moverWatchReport)
 
 	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
 	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {
