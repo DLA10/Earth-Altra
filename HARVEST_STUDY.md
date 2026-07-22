@@ -78,6 +78,26 @@ distinguishes real edges from mirages; this one was a mirage.
    4.5 on hand and is parked as future work.
 4. Negative result cost $0 (vs breadcrumbs' live −$1,216 lesson of the same shape).
 
+## Addendum — universe check (operator hypothesis, 2026-07-21)
+
+Hypothesis: the edge lives in habitually-volatile names; the full-534 universe diluted
+it. Causal test: classify each name by its PRIOR session's 1-min return stdev, bucket
+trades per window, and re-run the champion restricted to volatile names.
+
+Result: **real in July, not a rescue.** Restricting to prior-day σ ≥ 0.15–0.20%/min
+lifted July dev to 64.8–65.4% WR (+$129/+$101 @2bp) — but made June WORSE (46.9–49.0%
+vs 49.7% full) and left May red (46%). The vol ladder rises in July (53.8→65.9% across
+bands), INVERTS in June (b4 0.20–0.30%: best in July, worst in June), flat-red in May.
+Universe selection AMPLIFIES the regime's sign; it cannot flip it. Hierarchy measured:
+regime >> time-of-day > universe.
+
+Per-name nuance worth keeping: best hosts were liquid mid-vol semis (WDC 76.5%, MU
+69.6%, AMKR 63.2% — n=17–23 each); worst were lottery-ticket names (IONQ 35.5%, QBTS
+36.1%) whose dips are real repricings, not noise. Do NOT build a universe from this
+table (survivorship on tiny n) — but "volatile-yet-institutional beats ultra-spec" is a
+prior for any revival. Script: scratchpad `harvest_universe.py`.
+
 Artifacts: harness + all runs in session scratchpad (`harvest_lab.py`, `harvest_iter1-4`,
 `harvest_ml*.py`, `harvest_dl.py`, `harvest_combos.py`, `harvest_unseen.py`,
-`harvest_results.json`). No production code was created or modified.
+`harvest_universe.py`, `harvest_results.json`). No production code was created or
+modified.
