@@ -84,6 +84,9 @@ type Server struct {
 	// Surger returns the SURGER v2 three-detector lab report (nil-safe; set by main).
 	Surger func() interface{}
 
+	// Regime returns the shadow regime-detector report (nil-safe; set by main).
+	Regime func() interface{}
+
 	// movers-news badge cache (Alpaca-only, cheap): short TTL keeps the board snappy.
 	mnMu   sync.Mutex
 	mnResp *MoversNews
@@ -244,6 +247,7 @@ func (s *Server) Routes(r chi.Router) {
 	r.Get("/api/sndk", s.sndkReport)
 	r.Get("/api/breadcrumbs", s.breadcrumbsReport)
 	r.Get("/api/surger", s.surgerReport)
+	r.Get("/api/regime", s.regimeReport)
 
 	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
 	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {

@@ -96,3 +96,12 @@ func (s *Server) quantAgents() []quant.AgentInfo {
 		{Name: "Reviewer", Model: c.QuantReviewModel, Role: "daily report card", Live: llm},
 	}
 }
+
+// regimeReport returns the shadow regime detector's prediction/outcome journal state.
+func (s *Server) regimeReport(w http.ResponseWriter, r *http.Request) {
+	if s.Regime == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": true, "report": s.Regime()})
+}

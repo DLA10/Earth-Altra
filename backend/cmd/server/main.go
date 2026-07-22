@@ -40,6 +40,7 @@ import (
 	"live-optimus/backend/internal/ridp"
 	"live-optimus/backend/internal/risk"
 	"live-optimus/backend/internal/scanner"
+	"live-optimus/backend/internal/regime"
 	"live-optimus/backend/internal/signals"
 	"live-optimus/backend/internal/sndk"
 	"live-optimus/backend/internal/surger"
@@ -233,6 +234,19 @@ func main() {
 		srgMgr.Start(ctx)
 	} else {
 		log.Printf("surger: disabled (needs PAPER_DIP keys + signal universe + SURGER_LIVE)")
+	}
+
+	// Shadow regime detector (D3 morning-probe, REGIME_DETECTOR_STUDY.md): log-only
+	// daily TREND/CHOP prediction at 11:31 ET, outcome scored 16:05. Needs no keys —
+	// it reads candles and writes a journal; it gates nothing until it earns it.
+	var regimeDet *regime.Detector
+	if len(surgerSymbols) > 0 {
+		etzRg, lerr := time.LoadLocation("America/New_York")
+		if lerr != nil {
+			etzRg = time.UTC
+		}
+		regimeDet = regime.New(engine, etzRg, "data", surgerSymbols)
+		regimeDet.Start(ctx)
 	}
 
 	// Start the single SIP stream (reconnect on failure). On each (re)connect it
@@ -605,6 +619,9 @@ func main() {
 	srv.Quant = quantEngine
 	if srgMgr != nil {
 		srv.Surger = func() interface{} { return srgMgr.Report() }
+	}
+	if regimeDet != nil {
+		srv.Regime = func() interface{} { return regimeDet.Report() }
 	}
 	srv.Evals = evalsFn
 
