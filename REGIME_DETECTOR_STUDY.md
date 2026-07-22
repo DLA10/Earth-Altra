@@ -89,5 +89,24 @@ fourth such result this week. And the leak itself is the second lesson: the stud
 discipline (port forces re-read; pre-registered bars; repair before ship) caught a bug
 that flattered our own headline by +$584 of phantom edge.
 
+## Addendum — the 5 co-designed "packages" (same day, operator brief): ALL FAIL
+
+Five detector⊗execution units built as unified regime-native strategies, replayed over
+the same 136 sessions, same FIT/TEST split, pass bar pre-registered (TEST gated@2bp > 0
+AND > its own always-on twin AND ≥8 active days). Round 1: P1 FOLLOW +$63 @2bp on only
+6 test days (failed sample bar); P2 SNAPBACK execution dead at any gate (always-on
+−$3,745 — the 4th independent confirmation that afternoon dip-buying has no edge in
+this data); P3 STORM gate anti-correlated (gated −$280 vs ungated +$20); P4 DRIFT
+execution mildly positive alone (+$195) but the breadth gate SUBTRACTED value; P5 QUIET
+starved (1 active day). Round 2 (single disclosed iteration, dials re-chosen on FIT
+only): every package failed again — P1's edge vanished when its detector was loosened
+to speak more often (19 days → −$239): a small-n mirage.
+
+Salvage notes: (1) P4's ungated drift-join execution (+$195 TEST, +$106 in July) is
+worth one look as a PLAIN strategy at a weekly review — small, but the only execution
+with standalone out-of-sample merit. (2) The packages' failure strengthens the surviving
+path: D3-as-shadow gating EXISTING validated desks, not detector-native new strategies.
+
 Artifacts: `regime_fetch.py`, `regime_panel.py` (v2 probes), `regime_repair.py`,
-`regime_detectors.py`, `regime_days.pkl`, `regime_results.json` — session scratchpad.
+`regime_detectors.py`, `packages_lab.py`, `packages_score.py`, `packages_score2.py`,
+`regime_days.pkl`, `packages_exec.pkl`, results JSONs — session scratchpad.
