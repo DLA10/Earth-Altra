@@ -97,6 +97,11 @@ type Manager struct {
 	ageRun     bool
 	ensureLive func(string)
 	daySnap    func([]string) (map[string]DaySnap, error) // REST session-OHLCV fetch (nil = engine fallback)
+
+	// Order-lifecycle hardening (2026-07-23, after the LRCX 34-of-56 incident).
+	lastEntryAt  time.Time            // adoption reconciler stands down while an entry may be in flight
+	lastAdoptChk time.Time            // adoptUntracked throttle
+	lastNag      map[string]time.Time // per-symbol throttle for reprotect/adopt noise
 }
 
 type pythonSignal struct {
@@ -126,6 +131,7 @@ func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataD
 		universe: universe,
 		open:     map[string]*Position{},
 		trades:   []Trade{},
+		lastNag:  map[string]time.Time{},
 	}
 	_ = os.MkdirAll(m.dataDir, 0755)
 	m.loadState()
@@ -227,6 +233,13 @@ func (m *Manager) tick() {
 		m.monitorCatastrophicStops()
 	}
 
+	// 2b. Account-vs-book reconciler: adopt anything the account holds that the book
+	// doesn't know (stop-protected), starting before the open so a boot-time mismatch
+	// is covered before trading begins.
+	if mins >= 9*60 && mins <= 16*60+5 {
+		m.adoptUntracked()
+	}
+
 	// 3. EOD Hold-Age check + Time Exits (runs at 15:55 ET inside regular market hours)
 	if mins >= 15*60+55 && mins < 15*60+59 {
 		m.mu.Lock()
@@ -259,7 +272,15 @@ func (m *Manager) monitorCatastrophicStops() {
 		m.mu.Lock()
 		pos, ok := m.open[sym]
 		m.mu.Unlock()
-		if !ok || pos.StopID == "" {
+		if !ok {
+			continue
+		}
+		if pos.StopID == "" {
+			// Booked but stopless (failed safety exit / adoption fallback): keep
+			// trying to protect it every pass until the stop lands.
+			if m.live {
+				m.reprotect(pos)
+			}
 			continue
 		}
 
@@ -284,6 +305,118 @@ func (m *Manager) monitorCatastrophicStops() {
 				m.recordExit(sym, px, "safety_exit")
 			}
 		}
+	}
+}
+
+// reprotect places a fresh catastrophic stop for a booked position that has none.
+// Throttled per symbol so a persistent rejection doesn't spam the journal.
+func (m *Manager) reprotect(pos *Position) {
+	m.mu.Lock()
+	if time.Since(m.lastNag["rp|"+pos.Symbol]) < 5*time.Minute {
+		m.mu.Unlock()
+		return
+	}
+	m.lastNag["rp|"+pos.Symbol] = time.Now()
+	m.mu.Unlock()
+
+	stop := pos.StopLoss
+	if stop <= 0 {
+		if pos.Direction == "Long" {
+			stop = pos.EntryPrice * 0.95
+		} else {
+			stop = pos.EntryPrice * 1.05
+		}
+	}
+	coid := fmt.Sprintf("rbt_reprotect_%s_%d", pos.Symbol, time.Now().Unix())
+	var id string
+	var err error
+	if pos.Direction == "Long" {
+		id, err = m.broker.StopSell(pos.Symbol, pos.Qty, stop, coid)
+	} else {
+		id, err = m.broker.StopBuy(pos.Symbol, pos.Qty, stop, coid)
+	}
+	if err != nil {
+		log.Printf("rbt: reprotect %s FAILED (%v) — will retry", pos.Symbol, err)
+		m.journalEvent("reprotect_failed", pos.Symbol, err.Error())
+		return
+	}
+	m.mu.Lock()
+	pos.StopID = id
+	m.mu.Unlock()
+	m.saveState()
+	log.Printf("rbt: reprotect %s — stop $%.2f placed for %.0f shares", pos.Symbol, stop, pos.Qty)
+	m.journalEvent("reprotected", pos.Symbol, fmt.Sprintf("stop %.2f qty %.0f", stop, pos.Qty))
+}
+
+// signalLevels recovers the intended stop/target for a symbol from the day's scan
+// output (signals_today.json) — the levels the strategy actually wanted — falling
+// back to ±5% off the average entry when no signal record exists.
+func (m *Manager) signalLevels(sym, dir string, avg float64) (stop, target float64) {
+	if b, err := os.ReadFile(filepath.Join(m.dataDir, "signals_today.json")); err == nil {
+		var sigs []pythonSignal
+		if json.Unmarshal(b, &sigs) == nil {
+			for _, s := range sigs {
+				if s.Ticker == sym && s.StopLoss > 0 {
+					return s.StopLoss, s.Target
+				}
+			}
+		}
+	}
+	if dir == "Long" {
+		return avg * 0.95, avg * 1.05
+	}
+	return avg * 1.05, avg * 0.95
+}
+
+// adoptUntracked reconciles account truth against the book: any position the account
+// holds that the book doesn't know becomes a tracked, stop-protected position (the
+// 07-22 LRCX incident left 56 unprotected shares the book called flat — this is the
+// standing cure). Throttled to once a minute; stands down while an entry is in flight.
+func (m *Manager) adoptUntracked() {
+	if !m.live {
+		return
+	}
+	m.mu.Lock()
+	if time.Since(m.lastAdoptChk) < 60*time.Second || time.Since(m.lastEntryAt) < 2*time.Minute {
+		m.mu.Unlock()
+		return
+	}
+	m.lastAdoptChk = time.Now()
+	m.mu.Unlock()
+
+	positions, err := m.broker.Positions()
+	if err != nil {
+		return
+	}
+	for _, p := range positions {
+		m.mu.Lock()
+		_, tracked := m.open[p.Symbol]
+		m.mu.Unlock()
+		if tracked || p.Qty == 0 {
+			continue
+		}
+		dir := "Long"
+		qty := p.Qty
+		if qty < 0 {
+			dir = "Short"
+			qty = -qty
+		}
+		stop, target := m.signalLevels(p.Symbol, dir, p.AvgEntry)
+		pos := &Position{
+			Symbol: p.Symbol, Direction: dir, Qty: qty, EntryPrice: p.AvgEntry,
+			OpenedAt: time.Now(), TargetPrice: target, StopLoss: stop, Age: 0,
+		}
+		m.mu.Lock()
+		m.open[p.Symbol] = pos
+		m.mu.Unlock()
+		m.saveState()
+		log.Printf("rbt: ⚠ ADOPTED untracked %s position: %s %.0f @ $%.2f (stop %.2f, target %.2f) — reconciling account vs book", dir, p.Symbol, qty, p.AvgEntry, stop, target)
+		m.journalEvent("adopted", p.Symbol,
+			fmt.Sprintf("%s %.0f @ %.2f stop %.2f target %.2f", dir, qty, p.AvgEntry, stop, target))
+		if m.ensureLive != nil {
+			m.ensureLive(p.Symbol)
+		}
+		m.reprotect(pos)
 	}
 }
 
@@ -407,7 +540,7 @@ func (m *Manager) executeMarketExit(sym string, reason string) {
 			return
 		}
 		// Await the actual fill price to prevent P&L drift (Bug 5)
-		_, fillPrice := m.awaitFill(id, 12*time.Second)
+		_, fillPrice, _ := m.awaitTerminal(id, 20*time.Second)
 		if fillPrice > 0 {
 			exitPrice = fillPrice
 		} else {
@@ -630,20 +763,35 @@ func (m *Manager) runEntryScan(now time.Time) {
 					id, err = m.broker.MarketSell(sig.Ticker, qty, coid)
 				}
 				if err != nil {
+					// This line is where the DVN/USB shorts died on 07-22 (the paper
+					// account has shorting_enabled=false) — journal it so rejections
+					// survive the console.
 					log.Printf("rbt: ERROR placing entry order for %s: %v", sig.Ticker, err)
+					m.journalEvent("entry_rejected", sig.Ticker, err.Error())
 					continue
 				}
+				m.mu.Lock()
+				m.lastEntryAt = time.Now()
+				m.mu.Unlock()
 
-				// Await the actual fill price AND filled quantity (Bug 5 + partial-fill stop sizing)
-				filledQty, fillPrice := m.awaitFill(id, 12*time.Second)
-				if fillPrice > 0 {
-					entryPrice = fillPrice
-				} else {
+				// Settle the entry to a TERMINAL state and track exactly what filled —
+				// a partial is not an answer (the 07-22 LRCX 34-of-56 incident).
+				filledQty, fillPrice, term := m.awaitTerminal(id, 20*time.Second)
+				if !term {
+					log.Printf("rbt: WARNING entry for %s not terminal after 20s (filled so far %.0f)", sig.Ticker, filledQty)
+					m.journalEvent("entry_slow", sig.Ticker, fmt.Sprintf("non-terminal after 20s, filled %.0f", filledQty))
+				}
+				if filledQty <= 0 {
+					// Nothing filled (rejected / canceled / stuck) — never book fiction.
+					log.Printf("rbt: entry for %s produced no fill — skipping", sig.Ticker)
+					m.journalEvent("entry_unfilled", sig.Ticker, "no shares filled; nothing booked")
+					continue
+				}
+				entryPrice = fillPrice
+				if entryPrice <= 0 {
 					entryPrice = price
 				}
-				if filledQty > 0 {
-					posQty = filledQty // protect/track exactly the shares actually filled
-				}
+				posQty = filledQty // protect/track exactly the shares actually filled
 
 				// Place an exchange-side catastrophic stop at 2.5x ATR to protect overnight gaps (Bugs 3, 4)
 				// The closer 1.5x ATR strategy exit is checked at the close to avoid noise wicks.
@@ -660,42 +808,89 @@ func (m *Manager) runEntryScan(now time.Time) {
 				}
 
 				if stopErr != nil {
-					log.Printf("rbt: ERROR placing catastrophic stop for %s: %v. Cancelling position for safety.", sig.Ticker, stopErr)
+					// First attempt can race the just-terminal entry's exchange-side
+					// bookkeeping (the wash-trade rejection class) — settle, retry once.
+					log.Printf("rbt: stop for %s rejected (%v) — retrying in 3s", sig.Ticker, stopErr)
+					m.journalEvent("stop_rejected", sig.Ticker, stopErr.Error())
+					time.Sleep(3 * time.Second)
+					stopCoid2 := fmt.Sprintf("rbt_stop2_%s_%d", sig.Ticker, time.Now().Unix())
+					if sig.Direction == "Long" {
+						stopID, stopErr = m.broker.StopSell(sig.Ticker, posQty, catastrophicStop, stopCoid2)
+					} else {
+						stopID, stopErr = m.broker.StopBuy(sig.Ticker, posQty, catastrophicStop, stopCoid2)
+					}
+				}
+				if stopErr != nil {
+					log.Printf("rbt: ERROR placing catastrophic stop for %s twice: %v. Cancelling position for safety.", sig.Ticker, stopErr)
 					exitCoid := fmt.Sprintf("rbt_safety_exit_%s_%d", sig.Ticker, time.Now().Unix())
 					var exitPrice float64
 					var exitID string
+					var exErr error
 					if sig.Direction == "Long" {
-						exitID, _ = m.broker.MarketSell(sig.Ticker, posQty, exitCoid)
+						exitID, exErr = m.broker.MarketSell(sig.Ticker, posQty, exitCoid)
 					} else {
-						exitID, _ = m.broker.MarketBuy(sig.Ticker, posQty, exitCoid)
+						exitID, exErr = m.broker.MarketBuy(sig.Ticker, posQty, exitCoid)
+					}
+					if exErr != nil {
+						// Same race class — never swallow this error (the swallowed
+						// rejection here is what created the 07-22 LRCX ghost).
+						log.Printf("rbt: safety exit for %s rejected (%v) — retrying in 3s", sig.Ticker, exErr)
+						m.journalEvent("safety_exit_rejected", sig.Ticker, exErr.Error())
+						time.Sleep(3 * time.Second)
+						exitCoid2 := fmt.Sprintf("rbt_safety_exit2_%s_%d", sig.Ticker, time.Now().Unix())
+						if sig.Direction == "Long" {
+							exitID, exErr = m.broker.MarketSell(sig.Ticker, posQty, exitCoid2)
+						} else {
+							exitID, exErr = m.broker.MarketBuy(sig.Ticker, posQty, exitCoid2)
+						}
 					}
 					if exitID != "" {
-						_, exitPrice = m.awaitFill(exitID, 5*time.Second)
-					}
-					if exitPrice <= 0 {
-						exitPrice = entryPrice
+						_, exitPrice, _ = m.awaitTerminal(exitID, 20*time.Second)
 					}
 
-					pnl := (exitPrice - entryPrice) * posQty
-					if sig.Direction == "Short" {
-						pnl = (entryPrice - exitPrice) * posQty
+					// Book the exit ONLY if the account is verifiably flat — booking a
+					// fictional break-even while shares remain is how the ghost was born.
+					held, qerr := m.broker.PositionQty(sig.Ticker)
+					if exErr == nil && exitID != "" && qerr == nil && held == 0 {
+						if exitPrice <= 0 {
+							exitPrice = m.lastPrice(sig.Ticker)
+						}
+						if exitPrice <= 0 {
+							exitPrice = entryPrice
+						}
+						pnl := (exitPrice - entryPrice) * posQty
+						if sig.Direction == "Short" {
+							pnl = (entryPrice - exitPrice) * posQty
+						}
+						m.journalEvent("safety_exit_done", sig.Ticker,
+							fmt.Sprintf("flattened %.0f @ %.2f pnl %+.2f", posQty, exitPrice, pnl))
+						m.mu.Lock()
+						m.trades = append(m.trades, Trade{
+							Symbol:     sig.Ticker,
+							Direction:  sig.Direction,
+							Qty:        posQty,
+							EntryPrice: entryPrice,
+							ExitPrice:  exitPrice,
+							PnL:        pnl,
+							Reason:     "safety_exit",
+							OpenedAt:   time.Now(),
+							ClosedAt:   time.Now(),
+						})
+						m.mu.Unlock()
+						m.saveState()
+						continue // flat and verified — nothing to book as open
 					}
 
-					m.mu.Lock()
-					m.trades = append(m.trades, Trade{
-						Symbol:     sig.Ticker,
-						Direction:  sig.Direction,
-						Qty:        posQty,
-						EntryPrice: entryPrice,
-						ExitPrice:  exitPrice,
-						PnL:        pnl,
-						Reason:     "safety_exit",
-						OpenedAt:   time.Now(),
-						ClosedAt:   time.Now(),
-					})
-					m.mu.Unlock()
-					m.saveState()
-					continue // skip adding to open positions
+					// Could NOT verify flat — keep the position ON THE BOOK (stopless if
+					// need be) and scream. Truth over tidiness: the reprotect loop keeps
+					// retrying the stop every monitor pass until it lands.
+					if qerr == nil && held != 0 {
+						posQty = math.Abs(held)
+					}
+					log.Printf("rbt: CRITICAL %s safety exit UNVERIFIED (err=%v, held=%.0f) — booking OPEN position, stop pending", sig.Ticker, exErr, held)
+					m.journalEvent("safety_exit_failed", sig.Ticker,
+						fmt.Sprintf("held=%.0f err=%v — position kept on book, stop pending", held, exErr))
+					stopID = ""
 				}
 			} else {
 				entryPrice = price
@@ -826,16 +1021,48 @@ func (m *Manager) runNightlyRetrain(ctx context.Context) {
 	}()
 }
 
-func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+// awaitTerminal polls an order until it reaches a TERMINAL state (filled / canceled /
+// rejected / expired) and returns total filled qty, avg price, and whether a terminal
+// state was observed. Accepting a partial fill as "done" was the 2026-07-22 LRCX bug:
+// the entry filled 34-then-22 across two events one second apart, the desk protected
+// 34, and the instant safety exit raced the still-open buy — leaving 56 unprotected
+// shares the book called flat.
+func (m *Manager) awaitTerminal(id string, max time.Duration) (float64, float64, bool) {
+	var fq, ap float64
 	deadline := time.Now().Add(max)
 	for time.Now().Before(deadline) {
-		fq, ap, status, err := m.broker.Order(id)
-		if err == nil && fq > 0 && (status == "filled" || status == "partially_filled") {
-			return fq, ap
+		q, p, status, err := m.broker.Order(id)
+		if err == nil {
+			switch status {
+			case "filled", "canceled", "rejected", "expired", "done_for_day":
+				return q, p, true
+			}
+			if q > fq {
+				fq, ap = q, p
+			}
 		}
 		time.Sleep(700 * time.Millisecond)
 	}
-	return 0, 0
+	return fq, ap, false
+}
+
+// journalEvent appends one line to data/rbt/events_<day>.jsonl so order-lifecycle
+// failures survive the console (the 07-22 post-mortem had to be reconstructed from
+// Alpaca's fill log because rejections only went to stdout).
+func (m *Manager) journalEvent(typ, sym, note string) {
+	rec := map[string]interface{}{
+		"t": time.Now().In(m.etz).Format("15:04:05"), "type": typ, "sym": sym, "note": note,
+	}
+	f, err := os.OpenFile(filepath.Join(m.dataDir,
+		"events_"+time.Now().In(m.etz).Format("2006-01-02")+".jsonl"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if b, err := json.Marshal(rec); err == nil {
+		f.Write(append(b, '\n'))
+	}
 }
 
 // ReportState matches frontend serialization needs.
