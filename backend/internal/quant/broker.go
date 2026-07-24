@@ -349,6 +349,9 @@ type BrokerPosition struct {
 	Symbol   string
 	Qty      float64
 	AvgEntry float64
+	// CurrentPx is Alpaca's own mark for the position (additive 2026-07-24: lets desks
+	// price positions the candle engine doesn't stream, e.g. adopted names off-hours).
+	CurrentPx float64
 }
 
 // Positions lists the paper account's open positions (the account is dedicated to the
@@ -365,6 +368,7 @@ func (b *Broker) Positions() ([]BrokerPosition, error) {
 		Symbol        string `json:"symbol"`
 		Qty           string `json:"qty"`
 		AvgEntryPrice string `json:"avg_entry_price"`
+		CurrentPrice  string `json:"current_price"`
 	}
 	if err := json.Unmarshal(rb, &raw); err != nil {
 		return nil, err
@@ -373,7 +377,8 @@ func (b *Broker) Positions() ([]BrokerPosition, error) {
 	for _, p := range raw {
 		q, _ := strconv.ParseFloat(p.Qty, 64)
 		ae, _ := strconv.ParseFloat(p.AvgEntryPrice, 64)
-		out = append(out, BrokerPosition{Symbol: p.Symbol, Qty: q, AvgEntry: ae})
+		cp, _ := strconv.ParseFloat(p.CurrentPrice, 64)
+		out = append(out, BrokerPosition{Symbol: p.Symbol, Qty: q, AvgEntry: ae, CurrentPx: cp})
 	}
 	return out, nil
 }

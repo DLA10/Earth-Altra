@@ -12,6 +12,7 @@ interface RbtPosition {
   target_price: number;
   stop_loss: number;
   age: number;
+  last_px?: number; // backend mark (engine, else broker) — fallback when no quote streams
 }
 
 interface RbtTrade {
@@ -56,7 +57,19 @@ export function Rbt() {
           if (!alive) return;
           setData(r);
           if (r.report && r.report.positions) {
-            symbolsRef.current = new Set(r.report.positions.map((p: RbtPosition) => p.symbol));
+            const positions = r.report.positions as RbtPosition[];
+            symbolsRef.current = new Set(positions.map((p) => p.symbol));
+            // Seed marks from the backend for symbols with no live quote yet (adopted
+            // or off-hours names would otherwise show a fake $0 P&L until a tick lands).
+            setLivePrices((prev) => {
+              const next = { ...prev };
+              for (const p of positions) {
+                if (next[p.symbol] === undefined && p.last_px && p.last_px > 0) {
+                  next[p.symbol] = p.last_px;
+                }
+              }
+              return next;
+            });
           }
           setErr("");
         })

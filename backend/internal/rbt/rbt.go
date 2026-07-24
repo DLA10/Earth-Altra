@@ -55,6 +55,7 @@ type Position struct {
 	StopLoss    float64   `json:"stop_loss"`
 	StopID      string    `json:"stop_id"` // exchange-side catastrophic stop order ID
 	Age         int       `json:"age"`     // hold age in trading sessions
+	LastPx      float64   `json:"last_px,omitempty"` // report-time mark (engine, else broker) so the UI never shows a fake $0 P&L
 }
 
 // Trade holds one closed RBT trade record.
@@ -383,6 +384,24 @@ func (m *Manager) adoptUntracked() {
 	}
 	m.lastAdoptChk = time.Now()
 	m.mu.Unlock()
+
+	// Self-heal streaming: an open position whose symbol the engine can't price means
+	// its ensureLive activation never took (fire-and-forget) — re-fire it, throttled.
+	m.mu.Lock()
+	var deadFeeds []string
+	for sym := range m.open {
+		if m.lastPrice(sym) <= 0 && time.Since(m.lastNag["el|"+sym]) > 10*time.Minute {
+			m.lastNag["el|"+sym] = time.Now()
+			deadFeeds = append(deadFeeds, sym)
+		}
+	}
+	m.mu.Unlock()
+	for _, sym := range deadFeeds {
+		if m.ensureLive != nil {
+			log.Printf("rbt: %s has no live price feed — re-activating stream", sym)
+			m.ensureLive(sym)
+		}
+	}
 
 	positions, err := m.broker.Positions()
 	if err != nil {
@@ -1099,11 +1118,27 @@ func (m *Manager) Report() ReportState {
 		winRate = float64(wins) / float64(len(m.trades)) * 100
 	}
 
+	// Broker marks as fallback: the engine only prices streamed symbols, and an adopted
+	// or off-hours position can have no stream (HBAN 2026-07-24 showed $0 live P&L while
+	// Alpaca had it +$34). Engine price wins when present; broker mark otherwise.
+	brokerPx := map[string]float64{}
+	if m.live {
+		if bps, err := m.broker.Positions(); err == nil {
+			for _, bp := range bps {
+				brokerPx[bp.Symbol] = bp.CurrentPx
+			}
+		}
+	}
 	var openPos []*Position
 	var unrealized float64
 	for _, pos := range m.open {
-		openPos = append(openPos, pos)
 		price := m.lastPrice(pos.Symbol)
+		if price <= 0 {
+			price = brokerPx[pos.Symbol]
+		}
+		cp := *pos
+		cp.LastPx = price
+		openPos = append(openPos, &cp)
 		if price > 0 {
 			if pos.Direction == "Long" {
 				unrealized += (price - pos.EntryPrice) * pos.Qty
