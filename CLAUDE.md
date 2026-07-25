@@ -311,6 +311,7 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `QUANT_ENTRY_MODEL` / `QUANT_EXIT_MODEL` / `QUANT_REVIEW_MODEL` | haiku/haiku/opus | Agent models |
 | `QUANT_TRAIL_PCT` | `1.5` | Deterministic trailing-stop floor % |
 | `QUANT_EXIT_GRACE_MIN` | `10` | Agent 3 not consulted for a position's first N min |
+| `QUANT_EXIT_LLM` | `true` (env: false) | false = post-grace exits are rail-F math only (not-green-30m, stale-90m, 1.2%→0.6% tighten, $10/$4 lock) — Agent 3 replaced 2026-07-25 |
 | `QUANT_BREAKEVEN_R` / `QUANT_CHK_HALF_R` / `QUANT_CHK_FULL_R` / `QUANT_EXIT_NOISE_R` | `0.5/0.75/0.5/0.25` | Mechanical exit rails in R units (0 disables each) |
 | `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only (does NOT bench the signal desk or RIDP — each has its own flag) |
 | `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position overnight up to this (0 = flatten all) |
