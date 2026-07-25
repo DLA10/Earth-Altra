@@ -92,6 +92,8 @@ type Manager struct {
 	notional float64 // per-trade slice (USD) → qty = floor(notional/price)
 	maxSlots int     // max concurrent positions
 	lossCap  float64 // halt NEW entries once today's realized P&L ≤ -lossCap (USD, 0 = disabled)
+	cutUSD   float64 // operator's live $-cut experiment: flatten at -N USD unrealized (0 = off)
+	retrainDays int  // retrain staleness threshold (35 = legacy monthly; 7 = weekly per operator 2026-07-25)
 
 	// Exit dials (must match the model's % labels).
 	tpPct    float64 // target %, arms trail (default 0.0057)
@@ -191,6 +193,17 @@ func New(broker *quant.Broker, engine *candles.Engine, etz *time.Location, dataD
 }
 
 func (m *Manager) SetEnsureLive(fn func(string)) { m.ensureLive = fn }
+
+// SetCutUSD arms the operator's flat per-position dollar cut (0 = off). Live A/B
+// experiment 2026-07-25: judged after a month against the watermark counterfactual.
+func (m *Manager) SetCutUSD(v float64) { m.cutUSD = v }
+
+// SetRetrainDays overrides the retrain staleness threshold in days.
+func (m *Manager) SetRetrainDays(d int) {
+	if d > 0 {
+		m.retrainDays = d
+	}
+}
 
 func (m *Manager) Enabled() bool { return m != nil && m.broker.Enabled() }
 
@@ -661,6 +674,7 @@ func (m *Manager) manageExits(now time.Time) {
 		naked := m.live && pos.StopID == ""
 		reason := reasonFor(price, pos)
 		stop := pos.StopLoss
+		entry, posQty := pos.EntryPrice, pos.Qty
 		m.mu.Unlock()
 
 		// NEVER NAKED: a position whose protective stop could not be (re)placed is flattened
@@ -669,6 +683,16 @@ func (m *Manager) manageExits(now time.Time) {
 		if naked {
 			m.executeExit(sym, price, reason)
 			continue
+		}
+
+		// Operator's live $-cut experiment (2026-07-25): flat dollar floor per position,
+		// independent of the percentage stop. Judged after a month against the watermark
+		// counterfactual — the replay said ≈$0 net; the live market is the arbiter.
+		if m.cutUSD > 0 {
+			if unreal := (price - entry) * posQty; unreal <= -m.cutUSD {
+				m.executeExit(sym, price, "usd_cut")
+				continue
+			}
 		}
 
 		// Same-tick backup: if price already sits at/below the (possibly ratcheted) stop and
@@ -824,10 +848,31 @@ func (m *Manager) executeExit(sym string, price float64, reason string) {
 		}
 		return
 	}
-	if _, ap := m.awaitFill(id, 12*time.Second); ap > 0 {
+	if ap := m.settleExit(id); ap > 0 {
 		price = ap
+	} else {
+		log.Printf("breadcrumbs: %s exit shows no fills yet — booking decision mark $%.2f (reconcile trues up)", sym, price)
 	}
 	m.recordExit(sym, price, reason)
+}
+
+// settleExit resolves an exit sell to Alpaca's OWN final average fill price (operator
+// directive 2026-07-25: the ledger records the broker's numbers, never our decision-time
+// mark — the old 12s window booked RIOT's 9-partial exit $33 wrong). If the order is
+// still not terminal at the deadline, one last authoritative read returns whatever
+// average Alpaca reports so far — broker truth beats a stale local mark either way.
+func (m *Manager) settleExit(id string) float64 {
+	_, ap, terminal := m.awaitTerminal(id, 25*time.Second)
+	if terminal && ap > 0 {
+		return ap
+	}
+	if _, ap2, _, err := m.broker.Order(id); err == nil && ap2 > 0 {
+		if !terminal {
+			log.Printf("breadcrumbs: exit %s not terminal after 25s — booking Alpaca's partial avg $%.2f", id, ap2)
+		}
+		return ap2
+	}
+	return ap
 }
 
 func (m *Manager) recordExit(sym string, price float64, reason string) {
@@ -1220,8 +1265,9 @@ func (m *Manager) StartRetrain(ctx context.Context) {
 	}()
 }
 
-// retrainDue is true when there's no model, or the model's training month is behind the
-// current month (the rolling-monthly trigger), or it's simply gone stale (>35 days).
+// retrainDue is true when there's no model, or the model has gone stale past the
+// retrainDays threshold (operator 2026-07-25: weekly, was monthly — the rolling data
+// window stays months long; only the refresh cadence tightened).
 func (m *Manager) retrainDue() bool {
 	if _, err := os.Stat(m.modelPath); err != nil {
 		return true
@@ -1233,11 +1279,11 @@ func (m *Manager) retrainDue() bool {
 	if err != nil {
 		return true
 	}
-	now := time.Now().In(m.etz)
-	if t.Year() != now.Year() || t.Month() != now.Month() {
-		return true // a new calendar month began → roll the model forward
+	days := m.retrainDays
+	if days <= 0 {
+		days = 35
 	}
-	return now.Sub(t) > 35*24*time.Hour
+	return time.Now().In(m.etz).Sub(t) > time.Duration(days)*24*time.Hour
 }
 
 // retrain execs the pooled trainer on the desk's own universe and reloads the model meta.

@@ -838,9 +838,11 @@ func main() {
 			cfg.BreadcrumbsTPPct, cfg.BreadcrumbsSLPct, cfg.BreadcrumbsTrailPct, cfg.BreadcrumbsLock,
 			cfg.BreadcrumbsLossCap)
 		bcMgr.SetEnsureLive(func(sym string) { go srv.EnsureLive(sym) })
+		bcMgr.SetCutUSD(cfg.BreadcrumbsCutUSD)
+		bcMgr.SetRetrainDays(cfg.BreadcrumbsRetrainDays)
 		bcMgr.Start(ctx)
 		if cfg.BreadcrumbsRetrain {
-			bcMgr.StartRetrain(ctx) // monthly rolling retrain + boot catch-up (hands-off)
+			bcMgr.StartRetrain(ctx) // weekly rolling retrain + boot catch-up (hands-off)
 		}
 		srv.Breadcrumbs = func() interface{} { return bcMgr.Report() }
 		log.Printf("breadcrumbs: initialized and running on paper account")

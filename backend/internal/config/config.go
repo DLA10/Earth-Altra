@@ -83,8 +83,10 @@ type Config struct {
 	BreadcrumbsSLPct       float64  // hard stop %
 	BreadcrumbsTrailPct    float64  // trailing width %
 	BreadcrumbsLock        bool     // profit-lock: floor the trail at the target
-	BreadcrumbsRetrain     bool     // auto-retrain the pooled model monthly (rolling) + boot catch-up
+	BreadcrumbsRetrain     bool     // auto-retrain the pooled model on its rolling window + boot catch-up
+	BreadcrumbsRetrainDays int      // retrain staleness threshold in days (operator 2026-07-25: weekly)
 	BreadcrumbsLossCap     float64  // halt NEW entries once the day's realized P&L ≤ -cap (USD, 0 = disabled)
+	BreadcrumbsCutUSD      float64  // live $-cut experiment: flatten any position at -N USD unrealized (0 = off)
 	// Dip+rise desk (Agent 2 dip entries + the rise watcher — one strategy family, both
 	// fed by the Telegram dip watcher). Runs on its OWN paper account, separate from the
 	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
@@ -216,7 +218,9 @@ func Load() (*Config, error) {
 		BreadcrumbsTrailPct:    envFloat("BC_TRAIL_PCT", 0.002),
 		BreadcrumbsLock:        envBool("BC_LOCK", true),
 		BreadcrumbsRetrain:     envBool("BC_RETRAIN", true),
+		BreadcrumbsRetrainDays: int(envFloat("BC_RETRAIN_DAYS", 7)),
 		BreadcrumbsLossCap:     envFloat("BC_DAILY_LOSS_CAP", 500),
+		BreadcrumbsCutUSD:      envFloat("BC_CUT_USD", 0),
 		PaperDipKey:            strings.TrimSpace(os.Getenv("PAPER_DIP_KEY")),
 		PaperDipSecret:         strings.TrimSpace(os.Getenv("PAPER_DIP_SECRET")),
 		SurgerLive:             envBool("SURGER_LIVE", true),
