@@ -960,7 +960,10 @@ func (m *Manager) executeExit(sym string, price float64, reason string) {
 // still not terminal at the deadline, one last authoritative read returns whatever
 // average Alpaca reports so far — broker truth beats a stale local mark either way.
 func (m *Manager) settleExit(id string) float64 {
-	_, ap, terminal := m.awaitTerminal(id, 25*time.Second)
+	// 15s (not longer): the post-deadline authoritative read below captures Alpaca's
+	// running average anyway, and exits settle serially — a longer wait could stack
+	// past the 16:01 management window during the EOD flatten.
+	_, ap, terminal := m.awaitTerminal(id, 15*time.Second)
 	if terminal && ap > 0 {
 		return ap
 	}
@@ -1010,8 +1013,10 @@ func (m *Manager) recordExitLocked(pos *Position, price float64, reason string) 
 	}
 	delete(m.open, pos.Symbol)
 	m.cooldown[pos.Symbol] = time.Now() // embargo re-entry while the exit orders settle
-	// Count losing stop-outs per symbol per ET day for the bench rule.
-	if pnl <= 0 && (reason == "stop_loss" || reason == "catastrophic_stop") {
+	// Count losing stop-outs per symbol per ET day for the bench rule. usd_cut losses
+	// count too (review fix 2026-07-25): without this, the $25 cut would quietly remove
+	// the 2-strike bench brake — a downtrending name could be cut+re-entered all day.
+	if pnl <= 0 && (reason == "stop_loss" || reason == "catastrophic_stop" || reason == "usd_cut") {
 		day := time.Now().In(m.etz).Format("2006-01-02")
 		if m.stopDay != day {
 			m.stopDay = day
