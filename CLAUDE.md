@@ -315,7 +315,8 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only (does NOT bench the signal desk or RIDP — each has its own flag) |
 | `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position overnight up to this (0 = flatten all) |
 | `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe override |
-| `QUANT_SIGNALS_LIVE` | `true` | Signal-engine entries to paper broker (false = shadow) |
+| `QUANT_SIGNALS_LIVE` | `true` | Signal-engine entries to paper broker (false = shadow). **env=false since 2026-07-25: AI team BENCHED by operator** — engine still journals signals+counterfactuals, zero LLM calls |
+| `QUANT_REVIEWER` | `true` | Daily post-close LLM review (env=false since 2026-07-25 — was ungated before) |
 | `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge |
 | `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries at −cap |
 | `QUANT_TOD_GATE` | `false` | Time-of-day gate (default shadow-only) |
