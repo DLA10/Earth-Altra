@@ -334,7 +334,7 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `BC_BUDGET` / `BC_NOTIONAL` / `BC_MAX_SLOTS` | `200000/2000/0` | Budget / slice / slots (0 = one per symbol). .env currently runs notional 5000 |
 | `BC_TP_PCT` / `BC_SL_PCT` / `BC_TRAIL_PCT` / `BC_LOCK` | `.0057/.0071/.002/true` | Exit dials (must match model labels) |
 | `BC_RETRAIN` / `BC_RETRAIN_DAYS` | `true` / `7` | Rolling retrain + boot catch-up (weekly since 2026-07-25; was monthly) |
-| `BC_CUT_USD` | `0` (env: 25) | Live $-cut experiment: flatten any position at −N USD unrealized; month-long A/B vs watermark counterfactual, review 2026-08-21 |
+| `BC_CUT_USD` | `0` | Flat $-cut: flatten any position at −N USD unrealized. Wired but DISARMED (operator: measure via the daily watermark counterfactual through 2026-08-21, then decide; arming = set a value + restart) |
 | `BC_DAILY_LOSS_CAP` | `500` | Halt NEW breadcrumbs entries at −cap (0 = disabled; .env currently 0 by operator choice — uncapped data collection) |
 | `SURGER_LIVE` / `SURGER_NOTIONAL` / `SURGER_SLOTS` | `true/5000/5` | SURGER lab on the DIP account (slice USD / slots per variant) |
 | `RBT_Z_ENTRY` | `2.0` | RBT entry stretch σ (original 2.5) |
