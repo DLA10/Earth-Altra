@@ -78,7 +78,27 @@ type managedPos struct {
 	beDone  bool // breakeven ratchet already applied (or stop already ≥ entry)
 	chkHalf bool // mid-grace checkpoint (grace/2) already evaluated
 	chkFull bool // grace-end checkpoint already evaluated
+
+	mathPeak  float64 // highest mark seen by the deterministic exit stack (rail F)
+	tightened bool    // two-stage trail has entered its tight stage
 }
+
+// Rail F — the deterministic post-grace exit stack that REPLACES Agent 3's discretion
+// (operator decision 2026-07-25: "replace the agent with math"). Every layer was
+// validated elsewhere in this repo before being assembled here:
+//   two-stage tighten — SURGER's exit study (97 sessions) + RIDER's protect-the-gain;
+//   dollar lock       — the Guardian lock-grid family (week of shadow data);
+//   not-green-by-T    — dumb-game rule M2 (+$60 replayed);
+//   stale-thesis stop — dip bounces are front-loaded; no progress by T = thesis over.
+const (
+	mathTightTrig   = 0.012 // peak ≥ +1.2% over entry → tighten stage begins
+	mathTightPct    = 0.006 // tightened trail width under the peak
+	mathLockArmUSD  = 10.0  // $-lock arms once unrealized peak ≥ +$10
+	mathLockGBUSD   = 4.0   // …and floors $4 below that peak
+	mathNotGreenMin = 30    // not green by 30 min → exit
+	mathStaleMin    = 90    // never reached +stale gain by 90 min → exit
+	mathStaleGain   = 0.003 // the "made progress" bar for the stale rule (+0.3%)
+)
 
 // EntryContext carries what a position was opened WITH, so the exit agent can manage it
 // knowing the plan (strategy personality + original target) instead of blind. Target/Stop
@@ -111,6 +131,7 @@ type Manager struct {
 	alloc        *Allocator // THIS desk's capital pot (dip+rise and signal desks each have their own)
 	broker       *Broker
 	agent3       *Agent3
+	exitLLM      bool // consult Agent 3 after grace (false = rail-F math only; QUANT_EXIT_LLM)
 	trailPct     float64
 	overnightCap float64 // max position VALUE allowed past the close (0 = flatten all)
 
@@ -141,8 +162,12 @@ func NewManager(eng *Engine, alloc *Allocator, broker *Broker, agent3 *Agent3, t
 		alloc = eng.alloc // legacy single-desk wiring
 	}
 	return &Manager{eng: eng, alloc: alloc, broker: broker, agent3: agent3, trailPct: trailPct,
-		overnightCap: overnightCap, open: map[string]*managedPos{}}
+		overnightCap: overnightCap, open: map[string]*managedPos{}, exitLLM: true}
 }
+
+// SetExitLLM controls whether Agent 3 is consulted after the grace period (false =
+// rail-F deterministic exits only; QUANT_EXIT_LLM). The rail-F math runs either way.
+func (m *Manager) SetExitLLM(v bool) { m.exitLLM = v }
 
 // SetEnsureLive wires the on-demand streaming activation (sub-second position P&L in
 // the UI) and applies it to any ALREADY-open positions — rehydration runs before the
@@ -469,8 +494,14 @@ func (m *Manager) manage(ctx context.Context, pos *managedPos) {
 			return
 		}
 
-		// No Agent 3? The trailing stop manages it on its own.
-		if m.agent3 == nil || !m.agent3.Enabled() {
+		// F — deterministic post-grace stack (replaces Agent 3's discretion).
+		if m.mathExitStack(pos) {
+			return
+		}
+
+		// No Agent 3 (or LLM exits switched off)? The math above + the trailing stop
+		// manage the position entirely on their own.
+		if m.agent3 == nil || !m.agent3.Enabled() || !m.exitLLM {
 			continue
 		}
 
@@ -563,6 +594,97 @@ func (m *Manager) breakevenRatchet(pos *managedPos) {
 	pos.beDone = true
 	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
 		Note: fmt.Sprintf("breakeven ratchet: +%.2fR reached — stop moved to entry $%.2f (worst case now $0)", beRatchetR, be)})
+}
+
+// mathExitStack (rail F) runs after the grace period on every pass and needs no model:
+// timers cut the trades that aren't working, ratchets protect the ones that are.
+// Returns true when the position was closed.
+func (m *Manager) mathExitStack(pos *managedPos) bool {
+	if exitGraceMin > 0 && time.Since(pos.entryTime) < time.Duration(exitGraceMin)*time.Minute {
+		return false // ≤ grace: the operator-approved rails (D/E + floor) own this window
+	}
+	cur := m.eng.LastClose(pos.symbol)
+	if cur <= 0 {
+		return false
+	}
+	if pos.mathPeak < pos.entryPrice {
+		pos.mathPeak = pos.entryPrice
+	}
+	if cur > pos.mathPeak {
+		pos.mathPeak = cur
+	}
+	age := time.Since(pos.entryTime)
+
+	// F1 — not green by 30 min: the bounce this trade was bought for hasn't come.
+	if age >= time.Duration(mathNotGreenMin)*time.Minute && cur <= pos.entryPrice {
+		if m.forceExit(pos, "Math_NotGreen30") {
+			m.close(pos, fmt.Sprintf("math exit: not green by %dm", mathNotGreenMin))
+			return true
+		}
+		return false
+	}
+	// F2 — stale thesis: 90 minutes without ever reaching +0.3% = the move is over.
+	if age >= time.Duration(mathStaleMin)*time.Minute && pos.mathPeak < pos.entryPrice*(1+mathStaleGain) {
+		if m.forceExit(pos, "Math_Stale90") {
+			m.close(pos, fmt.Sprintf("math exit: no progress by %dm", mathStaleMin))
+			return true
+		}
+		return false
+	}
+
+	// F3/F4 — protect what's working: two-stage tighten + dollar lock, expressed as one
+	// ratcheted stop level (never down, never above market, meaningful steps only).
+	desired := 0.0
+	if pos.mathPeak >= pos.entryPrice*(1+mathTightTrig) {
+		desired = pos.mathPeak * (1 - mathTightPct)
+		if !pos.tightened {
+			pos.tightened = true
+			m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+				Note: fmt.Sprintf("math exit: peak +%.2f%% — trail tightened to %.2f%%", (pos.mathPeak/pos.entryPrice-1)*100, mathTightPct*100)})
+		}
+	}
+	if peakUSD := (pos.mathPeak - pos.entryPrice) * pos.qty; peakUSD >= mathLockArmUSD {
+		if lockPx := pos.entryPrice + (peakUSD-mathLockGBUSD)/pos.qty; lockPx > desired {
+			desired = lockPx
+		}
+	}
+	if desired > 0 && desired < cur {
+		m.mathRatchet(pos, desired)
+	}
+	return false
+}
+
+// mathRatchet moves the protective stop UP to level (same discipline as the breakeven
+// ratchet: confirmed cancel, one attempt, trailing-stop fallback, never unprotected).
+func (m *Manager) mathRatchet(pos *managedPos, level float64) {
+	// Already this high? (0.15% minimum step bounds order churn.) On a trailing stop
+	// (stopPrice 0), skip when the trail's own floor is already at/above the level.
+	if pos.stopPrice > 0 && level <= pos.stopPrice*1.0015 {
+		return
+	}
+	cur := m.eng.LastClose(pos.symbol)
+	if pos.stopPrice == 0 && cur > 0 && cur*(1-m.trailFor(pos)/100) >= level {
+		return
+	}
+	if !m.cancelAndConfirm(pos.stopOrderID) {
+		return // old stop filled/unconfirmable — next pass reconciles
+	}
+	coid := fmt.Sprintf("%s__%s__exit__Math_Ratchet__%d", QuantStrategy, pos.symbol, time.Now().UnixNano())
+	id, err := m.broker.StopSell(pos.symbol, pos.qty, level, coid)
+	if err != nil {
+		tc := fmt.Sprintf("%s__%s__exit__Trail_Stop__%d", QuantStrategy, pos.symbol, time.Now().UnixNano())
+		if pid, perr := m.broker.TrailingStopSell(pos.symbol, pos.qty, m.trailFor(pos), tc); perr == nil {
+			pos.stopOrderID = pid
+			pos.stopPrice = 0
+			m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+				Note: "math ratchet: stop placement failed — kept trailing stop"})
+		}
+		return
+	}
+	pos.stopOrderID = id
+	pos.stopPrice = level
+	m.eng.logRec(LogRecord{Agent: "pipeline", Event: "order", Symbol: pos.symbol,
+		Note: fmt.Sprintf("math ratchet: stop → $%.2f (peak $%.2f)", level, pos.mathPeak)})
 }
 
 // graceCheckpoints (rail E): two one-shot mechanical inspections — at grace/2 with the

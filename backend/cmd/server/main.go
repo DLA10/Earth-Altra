@@ -411,6 +411,8 @@ func main() {
 		sigBroker := quant.NewBroker("https://paper-api.alpaca.markets/v2", cfg.PaperClaudeKey, cfg.PaperClaudeSecret)
 		qMgr := quant.NewManager(qEngine, qAlloc, dipBroker, qAgent3, cfg.QuantTrailPct, cfg.QuantOvernightCap)
 		sigMgr := quant.NewManager(qEngine, sigAlloc, sigBroker, qAgent3, cfg.QuantTrailPct, cfg.QuantOvernightCap)
+		qMgr.SetExitLLM(cfg.QuantExitLLM)
+		sigMgr.SetExitLLM(cfg.QuantExitLLM)
 		quantManagers = append(quantManagers, qMgr, sigMgr)
 		qEngine.SetExecution(dipBroker, qMgr)
 		qEngine.SetSignalExecution(sigBroker, sigAlloc, cfg.QuantSignalsLive && sigBroker.Enabled())

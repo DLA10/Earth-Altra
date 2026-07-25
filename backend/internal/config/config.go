@@ -167,6 +167,9 @@ type Config struct {
 	// QuantReviewer enables the daily post-close LLM review (was previously ungated —
 	// added 2026-07-25 so benching the AI team stops ALL its API calls).
 	QuantReviewer bool
+	// QuantExitLLM: consult Agent 3 for post-grace exits (false = deterministic rail-F
+	// stack only; operator 2026-07-25 replaced the exit agent with math).
+	QuantExitLLM bool
 	// ResearchLoop auto-runs ml/research_loop.py at 13:30 ET (market open + 4h) on
 	// weekdays and delivers the report to Telegram. Proposals are never auto-applied.
 	ResearchLoop bool
@@ -253,6 +256,7 @@ func Load() (*Config, error) {
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
 		QuantReviewer:        envBool("QUANT_REVIEWER", true),
+		QuantExitLLM:         envBool("QUANT_EXIT_LLM", true),
 		ResearchLoop:         envBool("RESEARCH_LOOP", true),
 	}
 
