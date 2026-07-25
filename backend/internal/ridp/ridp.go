@@ -424,6 +424,7 @@ func (m *Manager) tick() {
 
 	m.refreshLivePositions()
 	m.reconcileGhosts()
+	m.reprotectStopless(now)
 	m.manageRider(now, sessionMin)
 	m.manageDipper(now, sessionMin)
 	m.manageReverter(now)
@@ -516,6 +517,25 @@ func (m *Manager) reconcileGhosts() {
 		fixes = append(fixes, fix{sym: sym, sell: excess, tracked: trackedQty})
 	}
 	m.mu.Unlock()
+	// Cancel each ghost symbol's ORPHANED resting orders before selling: shares held by
+	// an old stop are "insufficient qty available" to a market sell (64 failed flattens
+	// on 07-20 spun on exactly this).
+	if len(fixes) > 0 {
+		if oo, oerr := m.broker.OpenOrders(); oerr == nil {
+			canceled := 0
+			for _, o := range oo {
+				for _, f := range fixes {
+					if o.Symbol == f.sym {
+						_ = m.broker.Cancel(o.ID)
+						canceled++
+					}
+				}
+			}
+			if canceled > 0 {
+				time.Sleep(1500 * time.Millisecond) // let cancels settle so held_for_orders releases
+			}
+		}
+	}
 	for _, f := range fixes {
 		coid := fmt.Sprintf("ridp_ghost__%s__flatten__%d", f.sym, time.Now().UnixNano())
 		if _, err := m.broker.MarketSell(f.sym, f.sell, coid); err != nil {
@@ -526,6 +546,54 @@ func (m *Manager) reconcileGhosts() {
 		m.journal("ghost", "exit", f.sym,
 			fmt.Sprintf("flattened %.0f UNTRACKED share(s) (%.0f tracked) — leaked by a crossed entry/exit, not any strategy's position", f.sell, f.tracked))
 		log.Printf("ridp: ⚠ ghost reconcile: sold %.0f untracked %s", f.sell, f.sym)
+	}
+}
+
+// reprotectStopless arms the exchange-side protective order for any tracked position
+// that has none (deferred at entry, or a failed placement). This loop was CLAIMED by an
+// old comment but never existed — the 07-20 UNPROTECTED positions stayed naked for
+// their whole lives. Throttled per symbol; sizes to the LIVE held quantity.
+func (m *Manager) reprotectStopless(now time.Time) {
+	m.mu.Lock()
+	var todo []*Position
+	for _, pos := range m.open {
+		if pos.StopID != "" || pos.ExitID != "" {
+			continue
+		}
+		if now.Sub(m.lastSkip["rp|"+pos.Symbol]) < 45*time.Second {
+			continue
+		}
+		m.lastSkip["rp|"+pos.Symbol] = now
+		todo = append(todo, pos)
+	}
+	m.mu.Unlock()
+	for _, pos := range todo {
+		qty, ok := m.liveQty(pos.Symbol)
+		if !ok || qty <= 0 {
+			continue // not filled/visible yet — next pass
+		}
+		var id string
+		var err error
+		if pos.Strategy == "rider" {
+			sc := fmt.Sprintf("ridp_rider__%s__trail__%d", pos.Symbol, time.Now().UnixNano())
+			id, err = m.broker.TrailingStopSell(pos.Symbol, qty, riderTrailPct*100, sc)
+		} else {
+			sc := fmt.Sprintf("ridp_%s__%s__stop__%d", pos.Strategy, pos.Symbol, time.Now().UnixNano())
+			id, err = m.broker.StopSell(pos.Symbol, qty, pos.HardStop, sc)
+		}
+		if err != nil {
+			m.journal(pos.Strategy, "error", pos.Symbol, "reprotect failed ("+err.Error()+") — will retry")
+			continue
+		}
+		m.mu.Lock()
+		pos.StopID = id
+		if qty > pos.Qty {
+			pos.Qty = qty // account truth: more filled than the entry snapshot saw
+		}
+		m.mu.Unlock()
+		m.saveState()
+		m.journal(pos.Strategy, "entry", pos.Symbol, fmt.Sprintf("REPROTECTED — stop armed for %.0f share(s)", qty))
+		log.Printf("ridp: %s %s reprotected (%.0f shares)", pos.Strategy, pos.Symbol, qty)
 	}
 }
 
@@ -659,22 +727,27 @@ func (m *Manager) openPosition(strategy, sym string, qty float64, atr, hardStop 
 	if ap <= 0 {
 		ap = m.lastPrice(sym)
 	}
-	// Exchange-side protection. If placement fails, we still REGISTER the position
-	// (StopID empty) and the manage loop retries protection every tick — software exits
-	// run regardless, so it is never unmanaged and never an untracked ghost.
+	// Exchange-side protection — but ONLY once the entry order is TERMINAL. Placing a
+	// protective sell while the buy still works is a guaranteed 403 (its shares are
+	// held_for_orders): that race, fired once per entry, was the 07-20 268×UNPROTECTED
+	// day. A deferred stop is armed by reprotectStopless on the next tick(s).
 	var stopID string
-	var serr error
-	if strategy == "rider" {
-		sc := fmt.Sprintf("ridp_rider__%s__trail__%d", sym, time.Now().UnixNano())
-		stopID, serr = m.broker.TrailingStopSell(sym, fq, riderTrailPct*100, sc)
+	if !m.orderTerminal(id) {
+		m.journal(strategy, "entry", sym, "protection DEFERRED — entry order not yet terminal (slow fill); reprotect tick arms it")
 	} else {
-		sc := fmt.Sprintf("ridp_%s__%s__stop__%d", strategy, sym, time.Now().UnixNano())
-		stopID, serr = m.broker.StopSell(sym, fq, hardStop, sc)
-	}
-	if serr != nil {
-		stopID = ""
-		m.journal(strategy, "error", sym, "protective order failed ("+serr.Error()+") — tracked UNPROTECTED, retrying protection each tick")
-		log.Printf("ridp: %s %s protective order failed (%v) — tracked unprotected, retrying", strategy, sym, serr)
+		var serr error
+		if strategy == "rider" {
+			sc := fmt.Sprintf("ridp_rider__%s__trail__%d", sym, time.Now().UnixNano())
+			stopID, serr = m.broker.TrailingStopSell(sym, fq, riderTrailPct*100, sc)
+		} else {
+			sc := fmt.Sprintf("ridp_%s__%s__stop__%d", strategy, sym, time.Now().UnixNano())
+			stopID, serr = m.broker.StopSell(sym, fq, hardStop, sc)
+		}
+		if serr != nil {
+			stopID = ""
+			m.journal(strategy, "error", sym, "protective order failed ("+serr.Error()+") — reprotect tick will retry")
+			log.Printf("ridp: %s %s protective order failed (%v) — reprotect tick will retry", strategy, sym, serr)
+		}
 	}
 	pos := &Position{Strategy: strategy, Symbol: sym, Qty: fq, Entry: ap, OpenedAt: now,
 		Peak: ap, StopID: stopID, HardStop: hardStop, ATR: atr, LastDay: now.Format("2006-01-02")}
@@ -875,16 +948,33 @@ func (m *Manager) ensureProtection(p *Position) {
 	log.Printf("[ridp] %s %s protected on retry (%s)", p.Strategy, p.Symbol, id)
 }
 
+// awaitFill waits for the order's TERMINAL state and returns the final filled qty +
+// avg price; at the deadline it returns the best partial seen so far. Returning on the
+// FIRST partial (the old behavior) is the 34-of-56 class: downstream sizing then races
+// the still-open order and 403s (the 07-20 268×UNPROTECTED wound).
 func (m *Manager) awaitFill(id string, max time.Duration) (float64, float64) {
+	var fq, ap float64
 	deadline := time.Now().Add(max)
 	for time.Now().Before(deadline) {
-		fq, ap, status, err := m.broker.Order(id)
-		if err == nil && fq > 0 && (status == "filled" || status == "partially_filled") {
-			return fq, ap
+		q, p, status, err := m.broker.Order(id)
+		if err == nil {
+			switch status {
+			case "filled", "canceled", "rejected", "expired", "done_for_day":
+				return q, p
+			}
+			if q > fq {
+				fq, ap = q, p
+			}
 		}
 		time.Sleep(700 * time.Millisecond)
 	}
-	return 0, 0
+	return fq, ap
+}
+
+// orderTerminal reports whether an order has reached a terminal state (one read).
+func (m *Manager) orderTerminal(id string) bool {
+	_, _, st, err := m.broker.Order(id)
+	return err == nil && (st == "filled" || st == "canceled" || st == "rejected" || st == "expired" || st == "done_for_day")
 }
 
 // ---- daily context ----

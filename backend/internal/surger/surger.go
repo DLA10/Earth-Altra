@@ -85,6 +85,8 @@ type Trade struct {
 	EntrySlip  float64   `json:"entry_slip_bps,omitempty"`
 	HighPx     float64   `json:"high_px,omitempty"`
 	LowPx      float64   `json:"low_px,omitempty"`
+	TrigPx     float64   `json:"trig_px,omitempty"`       // intended exit level (stop/trail); 0 for EOD flattens
+	ExitSlip   float64   `json:"exit_slip_bps,omitempty"` // fill vs intended, bps (promote review needs round-trip ≤5bp)
 }
 
 // inflight is an order journaled before placement so a crash can never orphan it.
@@ -570,19 +572,35 @@ func (m *Manager) recordExit(vi int, sym string, px float64, reason string, qty 
 	if lo == 0 || px < lo {
 		lo = px
 	}
+	// Exit slippage vs the level we INTENDED to exit at (the resting/ratcheted stop).
+	// EOD flattens have no intended level. The Aug-18 promote review's ≤5bp round-trip
+	// bar needs this measured, not assumed.
+	trig := p.StopPx
+	if reason == "eod" {
+		trig = 0
+	}
+	slip := 0.0
+	if trig > 0 && px > 0 {
+		slip = (px - trig) / trig * 1e4
+	}
 	m.books[vi].Trades = append(m.books[vi].Trades, Trade{
 		Variant: vi, Symbol: sym, Qty: qty, EntryPrice: p.EntryPrice, ExitPrice: px,
 		PnL: (px - p.EntryPrice) * qty, Reason: reason,
 		OpenedAt: p.OpenedAt, ClosedAt: time.Now(),
 		SignalPx: p.SignalPx, EntrySlip: p.EntrySlip, HighPx: hi, LowPx: lo,
+		TrigPx: trig, ExitSlip: slip,
 	})
 	delete(m.books[vi].Open, sym)
 	m.books[vi].cooldown[sym] = time.Now()
 	m.saveStateLocked()
 	log.Printf("surger[%s]: EXIT %s x%.0f $%.2f→$%.2f P&L $%.2f (%s)",
 		VariantNames[vi], sym, qty, p.EntryPrice, px, (px-p.EntryPrice)*qty, reason)
-	m.journalLocked(vi, "exit", sym, fmt.Sprintf("x%.0f $%.2f→$%.2f pnl $%.2f (%s)",
-		qty, p.EntryPrice, px, (px-p.EntryPrice)*qty, reason))
+	note := fmt.Sprintf("x%.0f $%.2f→$%.2f pnl $%.2f (%s)",
+		qty, p.EntryPrice, px, (px-p.EntryPrice)*qty, reason)
+	if trig > 0 {
+		note += fmt.Sprintf(" slip %+.1fbps", slip)
+	}
+	m.journalLocked(vi, "exit", sym, note)
 }
 
 // ---------------- upkeep tick ----------------

@@ -383,6 +383,40 @@ func (b *Broker) Positions() ([]BrokerPosition, error) {
 	return out, nil
 }
 
+// OpenOrder is one resting order on the account (id + routing essentials only).
+type OpenOrder struct {
+	ID     string
+	Symbol string
+	Side   string
+}
+
+// OpenOrders lists the account's open orders (additive 2026-07-25: lets desks cancel a
+// symbol's ORPHANED resting orders before flattening ghost shares — selling shares an
+// old stop still holds is the "insufficient qty available" 403 class, 64 failures on
+// RIDP 07-20).
+func (b *Broker) OpenOrders() ([]OpenOrder, error) {
+	rb, code, err := b.do(http.MethodGet, "/orders?status=open&limit=500", nil)
+	if err != nil {
+		return nil, err
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("open orders fetch (%d): %s", code, strings.TrimSpace(string(rb)))
+	}
+	var raw []struct {
+		ID     string `json:"id"`
+		Symbol string `json:"symbol"`
+		Side   string `json:"side"`
+	}
+	if err := json.Unmarshal(rb, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]OpenOrder, 0, len(raw))
+	for _, o := range raw {
+		out = append(out, OpenOrder{ID: o.ID, Symbol: o.Symbol, Side: o.Side})
+	}
+	return out, nil
+}
+
 func ordTime(o paperOrd) time.Time {
 	if o.FilledAt != nil {
 		return *o.FilledAt
