@@ -94,6 +94,8 @@ type Manager struct {
 	lossCap  float64 // halt NEW entries once today's realized P&L ≤ -lossCap (USD, 0 = disabled)
 	cutUSD   float64 // operator's live $-cut experiment: flatten at -N USD unrealized (0 = off)
 	retrainDays int  // retrain staleness threshold (35 = legacy monthly; 7 = weekly per operator 2026-07-25)
+	ghosts   []*cutGhost // control arm: every usd_cut trade simulated as if never cut
+	cutStats CutStats    // running experiment ledger (persisted)
 
 	// Exit dials (must match the model's % labels).
 	tpPct    float64 // target %, arms trail (default 0.0057)
@@ -198,6 +200,101 @@ func (m *Manager) SetEnsureLive(fn func(string)) { m.ensureLive = fn }
 // experiment 2026-07-25: judged after a month against the watermark counterfactual.
 func (m *Manager) SetCutUSD(v float64) { m.cutUSD = v }
 
+// cutGhost is the experiment's CONTROL ARM: when the live $-cut fires, the trade keeps
+// running here under the desk's own rules (stop / target / lock+trail / EOD) on live
+// prices — so every cut carries its measured "what if we hadn't" twin.
+type cutGhost struct {
+	Symbol string
+	Qty    float64
+	Entry  float64
+	Stop   float64
+	Target float64
+	CutPnl float64
+	Armed  bool
+	Peak   float64
+	Opened time.Time
+}
+
+// CutStats is the running $25-cut experiment ledger: real cut P&L vs the ghosts'
+// uncut P&L. cut_pnl > ghost_pnl means the cut is winning.
+type CutStats struct {
+	Cuts     int     `json:"cuts"`
+	CutPnl   float64 `json:"cut_pnl"`
+	GhostPnl float64 `json:"ghost_pnl"`
+}
+
+// manageCutShadow advances every ghost one tick under the desk's own exit rules.
+func (m *Manager) manageCutShadow(now time.Time) {
+	m.mu.Lock()
+	ghosts := append([]*cutGhost(nil), m.ghosts...)
+	m.mu.Unlock()
+	if len(ghosts) == 0 {
+		return
+	}
+	mins := now.Hour()*60 + now.Minute()
+	var live []*cutGhost
+	for _, g := range ghosts {
+		price := m.lastPrice(g.Symbol)
+		if price <= 0 {
+			live = append(live, g)
+			continue
+		}
+		done, pnl, why := false, 0.0, ""
+		if !g.Armed && price <= g.Stop {
+			done, pnl, why = true, (g.Stop-g.Entry)*g.Qty, "stop"
+		} else {
+			if !g.Armed && price >= g.Target {
+				g.Armed = true
+				g.Peak = price
+			}
+			if g.Armed {
+				if price > g.Peak {
+					g.Peak = price
+				}
+				floor := g.Peak * (1 - m.trailPct)
+				if m.lock && floor < g.Target {
+					floor = g.Target
+				}
+				if price <= floor {
+					done, pnl, why = true, (floor-g.Entry)*g.Qty, "trail"
+				}
+			}
+		}
+		if !done && mins >= 15*60+59 {
+			done, pnl, why = true, (price-g.Entry)*g.Qty, "eod"
+		}
+		if !done {
+			live = append(live, g)
+			continue
+		}
+		m.mu.Lock()
+		m.cutStats.GhostPnl += pnl
+		m.saveStateLocked()
+		m.mu.Unlock()
+		m.cutJournal(map[string]interface{}{"type": "ghost_resolve", "sym": g.Symbol,
+			"ghost_pnl": round2(pnl), "why": why, "cut_pnl": round2(g.CutPnl),
+			"cut_advantage": round2(g.CutPnl - pnl)})
+		log.Printf("breadcrumbs: cut-shadow %s resolved (%s): uncut would be %+.2f vs cut %+.2f", g.Symbol, why, pnl, g.CutPnl)
+	}
+	m.mu.Lock()
+	m.ghosts = live
+	m.mu.Unlock()
+}
+
+// cutJournal appends one line to data/breadcrumbs/cutshadow_<day>.jsonl.
+func (m *Manager) cutJournal(rec map[string]interface{}) {
+	rec["t"] = time.Now().In(m.etz).Format("15:04:05")
+	f, err := os.OpenFile(filepath.Join(m.dataDir, "cutshadow_"+time.Now().In(m.etz).Format("2006-01-02")+".jsonl"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if b, err := json.Marshal(rec); err == nil {
+		f.Write(append(b, '\n'))
+	}
+}
+
 // SetRetrainDays overrides the retrain staleness threshold in days.
 func (m *Manager) SetRetrainDays(d int) {
 	if d > 0 {
@@ -287,6 +384,7 @@ func (m *Manager) tick() {
 	// — 12 calls/min, far under the rate limit even at hundreds of names.
 	if mins >= 9*60+30 && mins <= 16*60+1 {
 		m.manageExits(now)
+		m.manageCutShadow(now)
 		m.reconcile()
 		m.lastRecon = now
 	} else if time.Since(m.lastRecon) >= 60*time.Second {
@@ -899,6 +997,17 @@ func (m *Manager) recordExitLocked(pos *Position, price float64, reason string) 
 		PnL: pnl, Reason: reason, OpenedAt: pos.OpenedAt, ClosedAt: time.Now(),
 		Prob: pos.Prob, SignalPx: pos.SignalPx, EntrySlip: pos.EntrySlip, HighPx: hi, LowPx: lo,
 	})
+	// $25-cut experiment control arm: a cut trade keeps living as a ghost under the
+	// desk's own rules, so the review compares real-vs-uncut on every single cut.
+	if reason == "usd_cut" {
+		m.ghosts = append(m.ghosts, &cutGhost{Symbol: pos.Symbol, Qty: pos.Qty,
+			Entry: pos.EntryPrice, Stop: pos.StopLoss, Target: pos.TargetPrice,
+			CutPnl: pnl, Opened: pos.OpenedAt})
+		m.cutStats.Cuts++
+		m.cutStats.CutPnl += pnl
+		m.cutJournal(map[string]interface{}{"type": "cut", "sym": pos.Symbol,
+			"cut_pnl": round2(pnl), "ghost_stop": pos.StopLoss, "ghost_target": pos.TargetPrice})
+	}
 	delete(m.open, pos.Symbol)
 	m.cooldown[pos.Symbol] = time.Now() // embargo re-entry while the exit orders settle
 	// Count losing stop-outs per symbol per ET day for the bench rule.
@@ -1162,6 +1271,9 @@ func (m *Manager) Report() interface{} {
 		"max_slots":       m.maxSlots,
 		"open_count":      len(m.open),
 		"universe_size":   len(m.universe),
+		"cut_usd":         m.cutUSD,
+		"cut_stats":       m.cutStats,
+		"cut_ghosts_open": len(m.ghosts),
 		"universe":        m.universe,
 		"model_trained":   m.trainedTo,
 		"cash":            cash,
@@ -1185,8 +1297,9 @@ func (m *Manager) Report() interface{} {
 func (m *Manager) statePath() string { return filepath.Join(m.dataDir, "state.json") }
 
 type persisted struct {
-	Open   map[string]*Position `json:"open"`
-	Trades []Trade              `json:"trades"`
+	Open     map[string]*Position `json:"open"`
+	Trades   []Trade              `json:"trades"`
+	CutStats *CutStats            `json:"cut_stats,omitempty"`
 }
 
 func (m *Manager) loadState() {
@@ -1203,12 +1316,15 @@ func (m *Manager) loadState() {
 		m.open = st.Open
 	}
 	m.trades = st.Trades
+	if st.CutStats != nil {
+		m.cutStats = *st.CutStats
+	}
 }
 
 // saveStateLocked writes state atomically (temp + rename) so a crash mid-write can't corrupt
 // the book. Caller holds mu.
 func (m *Manager) saveStateLocked() {
-	b, err := json.MarshalIndent(persisted{Open: m.open, Trades: m.trades}, "", "  ")
+	b, err := json.MarshalIndent(persisted{Open: m.open, Trades: m.trades, CutStats: &m.cutStats}, "", "  ")
 	if err != nil {
 		return
 	}
