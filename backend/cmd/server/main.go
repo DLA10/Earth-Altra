@@ -459,9 +459,13 @@ func main() {
 
 		// Daily post-market review (Opus): reads the decision log + the MERGED trades of
 		// both desk accounts, writes a structured report to backend/data/reviews/.
-		qReviewer := quant.NewReviewer(qAnth, cfg.QuantReviewModel, qLog,
-			qEngine.MergedState, "data", etz)
-		go qReviewer.RunDaily(ctx)
+		if cfg.QuantReviewer {
+			qReviewer := quant.NewReviewer(qAnth, cfg.QuantReviewModel, qLog,
+				qEngine.MergedState, "data", etz)
+			go qReviewer.RunDaily(ctx)
+		} else {
+			log.Printf("quant: daily LLM reviewer DISABLED (QUANT_REVIEWER=false)")
+		}
 
 		if cfg.QuantLive && qAgent2.Enabled() && dipBroker.Enabled() {
 			qEngine.SetLive(true)

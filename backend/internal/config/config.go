@@ -164,6 +164,9 @@ type Config struct {
 	QuantStrategistModel string
 	// QuantStrategist enables the pre-market posture/allocation agent.
 	QuantStrategist bool
+	// QuantReviewer enables the daily post-close LLM review (was previously ungated —
+	// added 2026-07-25 so benching the AI team stops ALL its API calls).
+	QuantReviewer bool
 	// ResearchLoop auto-runs ml/research_loop.py at 13:30 ET (market open + 4h) on
 	// weekdays and delivers the report to Telegram. Proposals are never auto-applied.
 	ResearchLoop bool
@@ -249,6 +252,7 @@ func Load() (*Config, error) {
 		QuantAlignGate:       envBool("QUANT_ALIGN_GATE", true),
 		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
 		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
+		QuantReviewer:        envBool("QUANT_REVIEWER", true),
 		ResearchLoop:         envBool("RESEARCH_LOOP", true),
 	}
 
