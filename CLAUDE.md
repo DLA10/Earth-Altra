@@ -100,8 +100,10 @@ backend/
                             LLM on the trade path, own journal under data/ridp/. REVERTER
                             (−1.5σ dip below 15-min mean, exit at mean, z=−4 floor, flat
                             15:55) is thin-edge & cost-sensitive; 3 entry knife filters are
-                            DESIGNED+BACKTESTED, not yet implemented — observation week in
-                            progress, evidence + decision rule in REVERTER_FILTERS.md /
+                            DESIGNED+BACKTESTED, not yet implemented — SECOND observation
+                            week (2026-07-27→31) running unchanged by operator decision;
+                            finale (curfew grid × cascade halt × filters) decides at the
+                            2026-08-01/02 weekend. Evidence in REVERTER_FILTERS.md /
                             RIDP_REVERTER_FIXES.md
     rbt/                    RBT pairs/mean-reversion paper desk (see §14)
     sndk/                   SNDK 1-min micro-scalper paper desk (see §14)
@@ -561,11 +563,16 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   a validated short-window "early mode" covers ~10:05–11:29 under C2's book, journal
   tag `early:`), per-variant trails (C2 1.5→0.5% · C1 2.5→1.0% · SPECTRAL 3.5→2.0% —
   exit study in SURGER_V2.md), EOD flat 15:55, 3 books + journal in `data/surger/`.
+  Exit-slip journaling (planned stop level vs actual fill, bps; eod excluded) live since
+  2026-07-27 feeding the ~08-18 promote review — first datum RSG trail_stop −3.2bps.
 - **RIDP** (`internal/ridp`): shadow **Guardian** since 2026-07-21 — log-only P&L
   overseer (desk-stop/ratchet/lock/cascade/bench counterfactuals →
   `data/ridp/guardian_<day>.jsonl`, cannot trade by construction) feeding the Friday
-  filter decision. See §3 — REVERTER observation week in progress (unfiltered
-  live −$2,209 over 3 sessions; the 3 designed filters replay to −$300; decision after
-  the week per REVERTER_FILTERS.md). Known open ops issues, deliberately parked with that
-  decision: protective stops sized to requested-not-filled qty (268 UNPROTECTED events on
-  07-20) and ghost flattens that don't cancel resting orders first (64 failures 07-20).
+  filter decision. See §3 — REVERTER second observation week in progress (week-1
+  unfiltered −$5,024/6 sessions; only green bucket 09:30–10:00 lifetime +$265; the 3
+  designed filters replay to −$300; finale decides 2026-08-01/02 per REVERTER_FILTERS.md).
+  The two weekend-parked ops issues were FIXED 2026-07-25 (66e4ce4): entries settle to a
+  TERMINAL state before protection is placed (plus a reprotect loop for stopless
+  positions), and ghost flattens cancel the symbol's resting orders first. First session
+  on the fixes (07-27): 18/18 reverter entries protected first-try, zero UNPROTECTED,
+  zero failed ghost flattens.
