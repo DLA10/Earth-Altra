@@ -93,18 +93,46 @@ week: **10:00–11:00 ET is when knives happen** (7 consecutive confirming sessi
 one answer. That raises confidence in the *finding* even though no deployable detector
 survived.
 
+## 5b. Round 3 — the three unfinished families + the reality checks (2026-07-28)
+
+Everything left on the list was run: the triage-ML family, specialist, seq-DL, plus an
+entry-time model, a leave-one-day-out audit, and — decisively — a replay on the desk's
+**own logged reverter trades**.
+
+| test | result |
+|---|---|
+| **T1 triage-ML, one-shot at age 2/3/5/8** | **AUC 0.72 → 0.81, and it HOLDS out-of-sample** (CV 0.805 → TEST 0.810). The triage label is genuinely learnable — unlike the barrier label (0.50). **But the dollars don't follow: −1.9σ … +1.8σ.** It knows *whether* killing wins, not *how much*. |
+| **T2 money-weighted regressor** (predict $ saved, the obvious fix) | **−4.8σ / +0.6σ / −1.6σ / −1.8σ.** Optimizing dollars directly does not rescue it. |
+| **T3 specialist (per family, per volatility)** | noise: F2 +2.6σ at one threshold, −7.1σ at the next; **F1 negative at every threshold** (momentum kills hurt — third independent confirmation) |
+| **T4 seq-DL GRU on $ target** | corr +0.11, no usable threshold |
+| **T7 leave-one-day-out on the TOD survivor** | **drop 2026-07-27 and it collapses from +$4,242 to −$186 (−0.3σ).** Every other day-drop leaves it strong. The "survivor" was one session. |
+| **T6 REAL trades — 4,370 logged reverter trades, kills bounded by each trade's true exit** | K6 fires 1,131×, raw **+$1,853** — but vs the timing-matched control **+$255 (+0.2σ)**, and **82% of it is 5 trades**, with +$1,376 landing on 2026-07-21 — the session containing the known ANET $0-exit booking bug. A data artifact, not an edge. |
+| **T5 ENTRY-TIME model** (decide at entry, not mid-position) | **the only positive result.** Skipping the worst-predicted 20% of entries saves **$12,696** on TEST vs **$5,273** for skipping a random 20% — ≈2.4× better than chance (30%: $16.1k; 50%: $21.7k). Skipped entries average −$12.72 vs −$3.42 for kept. |
+
+**Round-3 verdict: the Knife Police is dead in every form.** Ten independent avenues,
+including a model with real predictive power (AUC 0.81), and not one produces dollars
+that survive a timing-matched control on either synthetic or real trades.
+
+**Why the synthetic study looked better than reality:** real reverter trades have a
+**median hold of 5 bars**; the synthetic baseline exit held up to 60. The lab was
+measuring "beat a bad baseline," and the desk's actual exits are far better than that
+strawman. Sobering companion number from the real replay: *exiting every reverter trade
+at bar 2* would have turned −$7,454 into −$3,086 — again the earliness artifact, but on
+real money it says something worth its own test: **reverter may simply hold too long.**
+(Oracle ceiling — killing at the perfect bar in every trade — is +$11,113.)
+
 ## 6. Status & what would settle it
 
-- **Not deployable.** No wiring proposed. The honest options: (a) a log-only shadow that
-  alerts when a dip position is underwater in 10:00–10:30 and let live sessions judge it;
-  (b) treat it as *entry-time* evidence instead — a 10:00–11:00 entry blackout, already on
-  the REVERTER weekend table, needs no detector at all and is the cheaper way to act on
-  the same fact.
-- **Untested (usage limit):** the specialist (per-family/volatility), triage-ML
-  (LightGBM on the triage label), and seq-DL families. TRIAGE-ML is the one genuinely
-  promising gap — the hazard table shows the triage label *is* learnable (precision
-  0.48–0.54); its failure was timing, not discrimination. A model that predicts
-  kill-wins **and** fires early is the remaining unexplored corner.
+- **NOT DEPLOYABLE — program closed.** No knife-detection shadow should be built. All
+  families are now tested (round 3 completed the three that hit a usage limit).
+- **Where the surviving value actually is: the ENTRY side.** T5's entry-time model beat
+  random entry-skipping by ~2.4×, and the same 10:00–11:00 fact keeps reappearing. That
+  points at the REVERTER weekend table's existing items (entry blackout + knife filters),
+  which need no detector, no new service, and no live kill authority.
+- **New candidate raised by the real-trade replay (not part of the original brief):**
+  reverter's hold time. Median 5 bars; a mechanical 2-bar exit would have cut the sample's
+  loss almost in half. Worth its own pre-registered replay at the weekend — with the same
+  caution that in a net-losing sample, *any* earlier exit flatters itself.
 - **Method note for future studies:** always include a degenerate benchmark and a
   timing-matched control. A rate-matched random control is not enough when the population
   has drift — it silently rewards earliness. That mistake produced round 1's retracted
