@@ -54,10 +54,6 @@ type Config struct {
 	TelegramBotToken string
 	TelegramChatID   string
 
-	// Quant paper account (a SEPARATE Alpaca paper account, isolated from the live keys
-	// above). The AI quant pipeline places its orders here. Empty key = shadow mode.
-	PaperClaudeKey    string
-	PaperClaudeSecret string
 	PaperRbtKey       string
 	PaperRbtSecret    string
 	// Per-desk paper accounts. STRICT one account per desk: sharing an account lets the
@@ -67,8 +63,6 @@ type Config struct {
 	// desk's account.
 	PaperRidpKey    string
 	PaperRidpSecret string
-	PaperSndkKey    string
-	PaperSndkSecret string
 	// Breadcrumbs desk: the generalized volatility scalper (SNDK pipeline extended to the
 	// validated 22-name volatile basket) with a hard budget tracker and leak-proof book.
 	// Its OWN paper account (PAPER_BREADCRUMBS_*). Empty keys = desk OFF.
@@ -98,81 +92,14 @@ type Config struct {
 	SurgerNotional float64 // per-trade slice USD
 	SurgerSlots    int     // max concurrent positions PER VARIANT
 
-	// Anthropic key for the quant agents (entry/exit/review). Empty = agents stay idle.
-	AnthropicAPIKey string
-	// ClaudeSymbols are always-streamed symbols for the quant pipeline (besides SPY/QQQ).
-	ClaudeSymbols []string
-
-	// Quant pipeline (dip-driven multi-agent). Agent 4 sentiment runs on a local Ollama model.
-	OllamaEndpoint string
-	OllamaModel    string
-	// QuantSentiment gates Agent 4 (the local-Ollama sentiment enrichment). It is ADVISORY
-	// only — its score merely tweaks Agent 2's snapshot and allocator ranking, and the whole
-	// dip/rise desk runs fine without it (as it already does when Ollama is offline). false =
-	// skip wiring Agent 4 entirely (no goroutine, no failed-request log spam). Default true.
-	QuantSentiment   bool
-	QuantEntryModel  string  // Agent 2 (entry) model
-	QuantExitModel   string  // Agent 3 (exit) model
-	QuantReviewModel string  // daily review model
-	QuantTrailPct    float64 // deterministic trailing-stop floor %
-	QuantLive        bool    // false = shadow (decide/log/label only); true = place paper orders
-	// QuantOvernightCap allows holding at most this much position VALUE (USD) past the
-	// close — the single best-performing winner only; everything else still flattens at
-	// 15:55 ET. 0 (default) = flatten everything, no overnight risk.
-	QuantOvernightCap float64
-
-	// Quant signal engine: the curated ~100-symbol universe file (QUANT_UNIVERSE.json).
+	// QuantUniverseCandidates points at QUANT_UNIVERSE.json — the curated trading symbol
+	// set. NAME IS LEGACY: the AI quant desk it was built for was removed 2026-07-31, but
+	// the file is load-bearing for RIDP, SURGER, the regime detector, RBT's baseline and
+	// the SIP bar subscription. Do not delete this field.
 	QuantUniverseCandidates []string
-	// QuantSignalsLive routes signal-engine entries (all strategies + the learned
-	// time-of-day gate — the validated Tier-1 config) to the PAPER broker via the LLM
-	// judge + allocator + manager. false = shadow journaling only.
-	QuantSignalsLive bool
-	// QuantJudgeModel is the signal entry judge's model.
-	QuantJudgeModel string
-	// QuantDailyLossCap halts new signal entries once the day's approximate realized
-	// P&L reaches -cap (USD).
-	QuantDailyLossCap float64
-	// QuantClfGate enables the promoted ML entry gate (RESEARCH_BACKLOG #15): nightly-
-	// trained per-strategy LightGBM classifiers score every signal's expected R and the
-	// trader rejects entries below the pre-registered 0.03 margin. Fail-open: without
-	// fresh models the desk trades exactly as before. Paper-side only.
-	QuantClfGate bool
-	// QuantRetrain auto-runs ml/train_live.py each weekday ~17:05 ET (plus a boot
-	// catch-up when models are stale) so the gate walks forward with the live journal.
-	QuantRetrain bool
-	// QuantTODGate: when true the signal trader ENFORCES the learned time-of-day gate
-	// (skips entries in buckets with proven negative expectancy). Default FALSE
-	// (shadow-only) since the 2026-07 re-validation: cumulative buckets fail across a
-	// regime change (12-mo: −$718 base → −$961 gated) and decayed buckets are too
-	// data-starved to beat no-gate on any window tested. The engine still journals
-	// tod_bucket/tod_blocked per signal and keeps decayed stats fresh for a future
-	// re-review; flipping this to true re-enforces without a code change.
-	QuantTODGate bool
-	// QuantAlignGate enforces the trend-alignment playbook (signals/alignment.go): each
-	// strategy trades only its proven (market trend, stock trend) cells from the
-	// 12-month regime study. Deterministic; unknown trends fail open. Default true.
-	QuantAlignGate bool
-	// RidpLive routes the RIDP two-strategy desk's orders (RIDER + DIPPER, both fully
-	// deterministic) to the paper-claude account. false = shadow (journals only).
+
+	// RidpLive routes RIDP desk entries to its paper broker (false = shadow journaling).
 	RidpLive bool
-	// QuantRiseLive routes rising-watcher entries to the paper broker: dips Agent 2
-	// declined that then print a CONFIRMED rise (validated on the 2026-07-06..08 replay:
-	// +0.37R mean vs a negative edge buying at detection). Default FALSE = shadow: the
-	// watcher arms, journals, and alerts every trigger but places no orders.
-	QuantRiseLive bool
-	// QuantStrategistModel is the pre-market Strategist agent's model ("" uses default).
-	QuantStrategistModel string
-	// QuantStrategist enables the pre-market posture/allocation agent.
-	QuantStrategist bool
-	// QuantReviewer enables the daily post-close LLM review (was previously ungated —
-	// added 2026-07-25 so benching the AI team stops ALL its API calls).
-	QuantReviewer bool
-	// QuantExitLLM: consult Agent 3 for post-grace exits (false = deterministic rail-F
-	// stack only; operator 2026-07-25 replaced the exit agent with math).
-	QuantExitLLM bool
-	// ResearchLoop auto-runs ml/research_loop.py at 13:30 ET (market open + 4h) on
-	// weekdays and delivers the report to Telegram. Proposals are never auto-applied.
-	ResearchLoop bool
 }
 
 const (
@@ -204,14 +131,10 @@ func Load() (*Config, error) {
 		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		TelegramChatID:   strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
 
-		PaperClaudeKey:    strings.TrimSpace(os.Getenv("PAPER_CLAUDE_KEY")),
-		PaperClaudeSecret: strings.TrimSpace(os.Getenv("PAPER_CLAUDE_SECRET")),
 		PaperRbtKey:       strings.TrimSpace(os.Getenv("PAPER_RBT_KEY")),
 		PaperRbtSecret:    strings.TrimSpace(os.Getenv("PAPER_RBT_SECRET")),
 		PaperRidpKey:      strings.TrimSpace(os.Getenv("PAPER_RIDP_KEY")),
 		PaperRidpSecret:   strings.TrimSpace(os.Getenv("PAPER_RIDP_SECRET")),
-		PaperSndkKey:      strings.TrimSpace(os.Getenv("PAPER_SNDK_KEY")),
-		PaperSndkSecret:   strings.TrimSpace(os.Getenv("PAPER_SNDK_SECRET")),
 
 		PaperBreadcrumbsKey:    strings.TrimSpace(os.Getenv("PAPER_BREADCRUMBS_KEY")),
 		PaperBreadcrumbsSecret: strings.TrimSpace(os.Getenv("PAPER_BREADCRUMBS_SECRET")),
@@ -233,31 +156,7 @@ func Load() (*Config, error) {
 		SurgerNotional:         envFloat("SURGER_NOTIONAL", 5000),
 		SurgerSlots:            int(envFloat("SURGER_SLOTS", 5)),
 
-		AnthropicAPIKey:      strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
-		ClaudeSymbols:        splitCSV(envStr("CLAUDE_SYMBOLS", "SNDK,MU")),
-		OllamaEndpoint:       envStr("OLLAMA_ENDPOINT", "http://localhost:11434"),
-		OllamaModel:          envStr("OLLAMA_MODEL", "gemma2:2b"),
-		QuantSentiment:       envBool("QUANT_SENTIMENT", true),
-		QuantEntryModel:      envStr("QUANT_ENTRY_MODEL", "claude-haiku-4-5"),
-		QuantExitModel:       envStr("QUANT_EXIT_MODEL", "claude-haiku-4-5"),
-		QuantReviewModel:     envStr("QUANT_REVIEW_MODEL", "claude-opus-4-8"),
-		QuantTrailPct:        envFloat("QUANT_TRAIL_PCT", 1.5),
-		QuantLive:            envBool("QUANT_LIVE", true),
-		QuantOvernightCap:    envFloat("QUANT_OVERNIGHT_CAP", 0),
-		QuantSignalsLive:     envBool("QUANT_SIGNALS_LIVE", true),
-		QuantJudgeModel:      envStr("QUANT_JUDGE_MODEL", "claude-haiku-4-5"),
-		QuantDailyLossCap:    envFloat("QUANT_DAILY_LOSS_CAP", 150),
-		QuantClfGate:         envBool("QUANT_CLF_GATE", true),
-		QuantRetrain:         envBool("QUANT_RETRAIN", true),
-		QuantTODGate:         envBool("QUANT_TOD_GATE", false),
-		QuantRiseLive:        envBool("QUANT_RISE_LIVE", false),
-		RidpLive:             envBool("RIDP_LIVE", true),
-		QuantAlignGate:       envBool("QUANT_ALIGN_GATE", true),
-		QuantStrategistModel: envStr("QUANT_STRATEGIST_MODEL", "claude-opus-4-8"),
-		QuantStrategist:      envBool("QUANT_STRATEGIST", true),
-		QuantReviewer:        envBool("QUANT_REVIEWER", true),
-		QuantExitLLM:         envBool("QUANT_EXIT_LLM", true),
-		ResearchLoop:         envBool("RESEARCH_LOOP", true),
+		RidpLive: envBool("RIDP_LIVE", true),
 	}
 
 	c.QuantUniverseCandidates = []string{

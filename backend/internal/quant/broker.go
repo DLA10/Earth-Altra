@@ -1,3 +1,17 @@
+// Package quant is, since 2026-07-31, ONLY the shared Alpaca paper-broker client.
+//
+// ⚠ READ BEFORE DELETING OR RENAMING THIS PACKAGE ⚠
+// The AI quant pipeline this package was named for (agents, managers, allocator,
+// signal trader, strategist, reviewer, clf gate, dip/rise desks) was REMOVED. What
+// survives here is the plain REST order client that FIVE LIVE PAPER DESKS depend on:
+//
+//	internal/ridp  (+ ridp/guardian.go)  internal/rbt
+//	internal/surger                      internal/breadcrumbs
+//
+// Deleting this package, or renaming it without updating those importers, breaks every
+// one of them. Renaming to internal/paperbroker is a safe mechanical follow-up (a pure
+// import-path change) — it was deliberately kept out of the removal commit so that no
+// file holding live positions was touched. Nothing here talks to the real-money account.
 package quant
 
 import (
@@ -8,20 +22,18 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// QuantStrategy prefixes every client_order_id so the quant pipeline's orders are
-// distinguishable from anything else on the (shared) paper account during reconstruction.
-const QuantStrategy = "QuantDip"
+// round2 rounds a price to cents. (Kept with the broker: order prices must be 2dp or
+// Alpaca rejects them. Originally lived in the deleted quant/engine.go.)
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
-// Broker is the quant pipeline's paper-account order client (its OWN key pair). It places real
-// paper orders — market entries, the deterministic trailing-stop floor, tightened stops, and
-// market exits — and reconstructs P&L from the account's order history. The live real-money key
-// is never used here.
+// Broker is a paper-account order client (its OWN key pair, one per desk). It places real
+// paper orders — market entries, trailing-stop floors, tightened stops, and market exits.
+// The live real-money key is never used here.
 type Broker struct {
 	base   string
 	key    string
@@ -174,25 +186,6 @@ func (b *Broker) StopBuy(sym string, qty, stopPrice float64, coid string) (strin
 	})
 }
 
-// MarketBracketOrder places a market entry order with associated take profit and stop loss bracket orders.
-func (b *Broker) MarketBracketOrder(sym string, qty float64, side string, targetPrice, stopPrice float64, coid string) (string, error) {
-	return b.order(map[string]interface{}{
-		"symbol":        sym,
-		"qty":           wholeQty(qty),
-		"side":          side,
-		"type":          "market",
-		"time_in_force": "gtc",
-		"order_class":   "bracket",
-		"take_profit": map[string]interface{}{
-			"limit_price": round2(targetPrice),
-		},
-		"stop_loss": map[string]interface{}{
-			"stop_price": round2(stopPrice),
-		},
-		"client_order_id": coid,
-	})
-}
-
 // CancelOpenOrders cancels every OPEN order for one symbol. A standalone stop is NOT
 // auto-canceled when its position closes (only bracket/OCO siblings are), so this is used to
 // clear an orphaned protective stop after a position is closed outside the normal exit path,
@@ -293,42 +286,6 @@ func (b *Broker) PositionQty(sym string) (float64, error) {
 	return q, nil
 }
 
-// allOrders fetches the account's full order history, paginating past Alpaca's 500-per-
-// request cap (ascending by submitted_at with an exclusive `after` cursor), so
-// reconstruction doesn't silently lose the oldest entries — and mispair entries with
-// exits — once the account's lifetime order count passes one page.
-func (b *Broker) allOrders() ([]paperOrd, error) {
-	var out []paperOrd
-	after := ""
-	for page := 0; page < 40; page++ { // 40 × 500 = 20k orders — runaway guard
-		path := "/orders?status=all&limit=500&nested=false&direction=asc"
-		if after != "" {
-			path += "&after=" + url.QueryEscape(after)
-		}
-		rb, code, err := b.do(http.MethodGet, path, nil)
-		if err != nil {
-			return out, err
-		}
-		if code != http.StatusOK {
-			return out, fmt.Errorf("orders fetch (%d): %s", code, strings.TrimSpace(string(rb)))
-		}
-		var batch []paperOrd
-		if err := json.Unmarshal(rb, &batch); err != nil {
-			return out, err
-		}
-		out = append(out, batch...)
-		if len(batch) < 500 {
-			break
-		}
-		last := batch[len(batch)-1]
-		if last.SubmittedAt == nil {
-			break
-		}
-		after = last.SubmittedAt.Format(time.RFC3339Nano)
-	}
-	return out, nil
-}
-
 type paperOrd struct {
 	ID             string     `json:"id"`
 	ClientOrderID  string     `json:"client_order_id"`
@@ -415,99 +372,6 @@ func (b *Broker) OpenOrders() ([]OpenOrder, error) {
 		out = append(out, OpenOrder{ID: o.ID, Symbol: o.Symbol, Side: o.Side})
 	}
 	return out, nil
-}
-
-func ordTime(o paperOrd) time.Time {
-	if o.FilledAt != nil {
-		return *o.FilledAt
-	}
-	if o.SubmittedAt != nil {
-		return *o.SubmittedAt
-	}
-	return time.Now()
-}
-
-// Reconstruct rebuilds the quant pipeline's positions + closed trades + realized P&L from its own
-// filled paper orders (prefix QuantStrategy), pairing entries with the next sell per symbol. Any
-// filled sell (Agent-3 market exit OR the protective stop) closes the position; the exit reason
-// comes from the sell's client_order_id. markFn marks open positions to the live price.
-func (b *Broker) Reconstruct(markFn func(string) float64) (QuantState, error) {
-	raw, err := b.allOrders()
-	if err != nil {
-		return QuantState{}, err
-	}
-
-	filled := make([]paperOrd, 0, len(raw))
-	for _, o := range raw {
-		if !strings.HasPrefix(o.ClientOrderID, QuantStrategy+"__") {
-			continue
-		}
-		fq, _ := strconv.ParseFloat(o.FilledQty, 64)
-		fp, _ := strconv.ParseFloat(o.FilledAvgPrice, 64)
-		if fq <= 0 || fp <= 0 {
-			continue
-		}
-		// Only fully-filled orders close/open a position cleanly. (Market orders fill fully;
-		// counting partials here would mispair entries/exits and misstate realized P&L.)
-		if o.Status == "filled" {
-			filled = append(filled, o)
-		}
-	}
-	sort.Slice(filled, func(i, j int) bool { return ordTime(filled[i]).Before(ordTime(filled[j])) })
-
-	var st QuantState
-	open := map[string]QuantPosition{}
-	for _, o := range filled {
-		parts := strings.Split(o.ClientOrderID, "__")
-		if len(parts) < 3 {
-			continue
-		}
-		sym := parts[1]
-		qty, _ := strconv.ParseFloat(o.FilledQty, 64)
-		price, _ := strconv.ParseFloat(o.FilledAvgPrice, 64)
-		t := ordTime(o)
-		if o.Side == "buy" {
-			open[sym] = QuantPosition{Symbol: sym, Qty: qty, EntryPrice: price, EntryTime: t, MarkPrice: price}
-			continue
-		}
-		// Any sell closes the position. Reason = parts[3] if present (entry/exit/stop coids),
-		// else "Trail_Stop" (a protective stop fill named without a reason segment).
-		reason := "Trail_Stop"
-		if len(parts) >= 4 && parts[3] != "" {
-			reason = parts[3]
-		}
-		if pos, ok := open[sym]; ok {
-			st.Trades = append(st.Trades, QuantTrade{
-				Symbol: sym, EntryTime: pos.EntryTime, ExitTime: t,
-				EntryPrice: pos.EntryPrice, ExitPrice: price, Qty: pos.Qty,
-				PNL: pos.Qty * (price - pos.EntryPrice), ExitReason: reason,
-			})
-			st.RealizedPNL += pos.Qty * (price - pos.EntryPrice)
-			delete(open, sym)
-		}
-	}
-	for _, pos := range open {
-		if markFn != nil {
-			if px := markFn(pos.Symbol); px > 0 {
-				pos.MarkPrice = px
-				pos.UnrealizedPNL = pos.Qty * (px - pos.EntryPrice)
-			}
-		}
-		st.UnrealizedPNL += pos.UnrealizedPNL
-		st.Positions = append(st.Positions, pos)
-	}
-	sort.Slice(st.Positions, func(i, j int) bool { return st.Positions[i].Symbol < st.Positions[j].Symbol })
-	wins := 0
-	for _, tr := range st.Trades {
-		if tr.PNL > 0 {
-			wins++
-		}
-	}
-	st.TotalTrades = len(st.Trades)
-	if st.TotalTrades > 0 {
-		st.WinRate = float64(wins) / float64(st.TotalTrades) * 100
-	}
-	return st, nil
 }
 
 func wholeQty(q float64) string { return strconv.FormatFloat(math.Floor(q), 'f', 0, 64) }

@@ -38,7 +38,7 @@ import (
 	"live-optimus/backend/internal/moverwatch"
 	"live-optimus/backend/internal/regime"
 	"live-optimus/backend/internal/scanner"
-	"live-optimus/backend/internal/signals"
+	"live-optimus/backend/internal/universe"
 	"live-optimus/backend/internal/surger"
 	"live-optimus/backend/internal/watchlist"
 )
@@ -93,17 +93,17 @@ func main() {
 		log.Printf("watchlist seeded with %d default symbols", len(watchMgr.All()))
 	}
 
-	// Quant-pipeline symbols that must stream like execution/watchlist symbols so the agents
-	// always see fresh candles (incl. across SIP reconnects). SPY/QQQ provide the
-	// market-context backdrop the entry/exit agents read on every decision.
-	var paperSymbols []string
-	if (cfg.PaperClaudeKey != "" && cfg.PaperClaudeSecret != "") ||
-		(cfg.PaperDipKey != "" && cfg.PaperDipSecret != "") {
-		paperSymbols = unionSymbols(cfg.ClaudeSymbols, []string{"SPY", "QQQ"})
-	}
+	// Market-context symbols. These must ALWAYS be registered in the candle engine and
+	// streamed like execution/watchlist symbols — candles.Engine.OnBar silently DROPS bars
+	// for unregistered symbols, and RIDP's RIDER entry gate reads QQQ's session open/last
+	// (ridp/rider.go: "QQQ not falling"). With no QQQ candles that gate reads 0 and RIDER
+	// stops entering with no error and no log line. This list was previously gated on the
+	// AI-quant account keys; when that desk was removed 2026-07-31 the gate was dropped so
+	// the failure mode can never come back. Never make these conditional on a desk's keys.
+	contextSymbols := []string{"SPY", "QQQ"}
 
 	// All symbols that need full live (trades/quotes) treatment.
-	liveSymbols := unionSymbols(unionSymbols(execMgr.All(), watchMgr.All()), paperSymbols)
+	liveSymbols := unionSymbols(unionSymbols(execMgr.All(), watchMgr.All()), contextSymbols)
 
 	// Candle engine + hub. Keep enough 1-minute candles to hold a full extended
 	// session (premarket + regular + after-hours ≈ 960 min) with headroom, so the
@@ -203,7 +203,7 @@ func main() {
 	// the regime detector. RBT loads its own baseline file separately further down.
 	var sigSymbols []string
 	var surgerSymbols []string
-	if uni, err := signals.LoadUniverse(cfg.QuantUniverseCandidates...); err != nil {
+	if uni, err := universe.Load(cfg.QuantUniverseCandidates...); err != nil {
 		log.Printf("universe: disabled — %v", err)
 	} else {
 		sigSymbols = uni.All()
@@ -266,7 +266,7 @@ func main() {
 	// subscribes trades/quotes for the current execution symbols (base + added) and
 	// bars for the union of execution + scan + signal universes, so added symbols
 	// survive reconnects.
-	go runStream(ctx, client, execMgr, watchMgr, scanSymbols, paperSymbols, sigSymbols, engine, scn, srgMgr, h, flowTracker)
+	go runStream(ctx, client, execMgr, watchMgr, scanSymbols, contextSymbols, sigSymbols, engine, scn, srgMgr, h, flowTracker)
 
 	// Periodically push account + positions + open orders to clients. A trade update
 	// (fill/cancel/etc.) signals refreshCh to refresh immediately instead of waiting
@@ -404,7 +404,7 @@ func main() {
 		// full 534-name file is not) ∪ the legacy RBT 100. Priced via one REST snapshot at
 		// scan time, so universe size adds nothing to the SIP stream.
 		rbtUni := rbt.RbtUniverse
-		if bu, err := signals.LoadUniverse(os.Getenv("RBT_UNIVERSE_PATH"),
+		if bu, err := universe.Load(os.Getenv("RBT_UNIVERSE_PATH"),
 			"../QUANT_UNIVERSE.baseline-2026-07-16.json", "QUANT_UNIVERSE.baseline-2026-07-16.json"); err == nil {
 			set := map[string]bool{}
 			for _, s := range rbtUni {
@@ -526,7 +526,7 @@ func runKeycheck(client *alpaca.Client) {
 	fmt.Println("\nRESULT: keys valid AND SIP / Algo Trader Plus is ACTIVE.")
 }
 
-func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *execsym.Manager, scanSymbols, paperSymbols, sigSymbols []string, engine *candles.Engine, scn *scanner.Scanner, srgMgr *surger.Manager, h *hub.Hub, fl *flow.Tracker) {
+func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *execsym.Manager, scanSymbols, contextSymbols, sigSymbols []string, engine *candles.Engine, scn *scanner.Scanner, srgMgr *surger.Manager, h *hub.Hub, fl *flow.Tracker) {
 	handlers := alpaca.StreamHandlers{
 		OnTrade: func(symbol string, t time.Time, price, size float64) {
 			engine.OnTrade(symbol, t, price, size)
@@ -559,7 +559,7 @@ func runStream(ctx context.Context, client *alpaca.Client, execMgr, watchMgr *ex
 		// Recompute each (re)connect so runtime-added symbols are re-subscribed. Paper-engine
 		// symbols are always included so those engines never lose their candle feed; the
 		// signal universe rides the bar channel only (no trades/quotes needed).
-		tqSymbols := unionSymbols(unionSymbols(execMgr.All(), watchMgr.All()), paperSymbols)
+		tqSymbols := unionSymbols(unionSymbols(execMgr.All(), watchMgr.All()), contextSymbols)
 		barSymbols := unionSymbols(unionSymbols(tqSymbols, scanSymbols), sigSymbols)
 		// On every reconnect (but not the first connect — main already backfilled),
 		// re-pull the session so any minutes missed while the stream was down (e.g.

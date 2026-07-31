@@ -1,4 +1,8 @@
-package signals
+// Package universe loads the curated trading symbol set (QUANT_UNIVERSE.json) that the
+// live desks share. It moved out of internal/signals on 2026-07-31 when the AI signal
+// desk was retired: RIDP, SURGER, the regime detector and the SIP bar subscription all
+// depend on this loader, so it outlived the package it was born in.
+package universe
 
 import (
 	"encoding/json"
@@ -8,7 +12,7 @@ import (
 	"strings"
 )
 
-// Universe is the curated quant trading set (QUANT_UNIVERSE.json): ~100 liquid,
+// Universe is the curated trading set (QUANT_UNIVERSE.json): liquid,
 // financially solid names grouped by trend sector, plus context symbols (SPY/QQQ/SMH)
 // that are streamed for the market backdrop but never traded.
 type Universe struct {
@@ -20,8 +24,8 @@ type Universe struct {
 	sectorOf map[string]string
 }
 
-// LoadUniverse reads the first existing candidate path.
-func LoadUniverse(candidates ...string) (*Universe, error) {
+// Load reads the first existing candidate path.
+func Load(candidates ...string) (*Universe, error) {
 	var path string
 	for _, c := range candidates {
 		if c == "" {

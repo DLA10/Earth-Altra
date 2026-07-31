@@ -1,4 +1,4 @@
-package signals
+package universe
 
 import "testing"
 
@@ -8,7 +8,7 @@ import "testing"
 // backend would have booted with NO universe (signal engine + RIDP dead). Any encoding,
 // shape, or shrink regression in the file must fail here, not at market open.
 func TestLoadRepoUniverse(t *testing.T) {
-	u, err := LoadUniverse("../../../QUANT_UNIVERSE.json")
+	u, err := Load("../../../QUANT_UNIVERSE.json")
 	if err != nil {
 		t.Fatalf("QUANT_UNIVERSE.json failed to parse with the production loader: %v", err)
 	}
