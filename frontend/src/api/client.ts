@@ -5,7 +5,6 @@ import type {
   Candle,
   ChartRange,
   DecepticonWatchlist,
-  DipRiseReport,
   SurgerReport,
   IntervalRank,
   KeyCheck,
@@ -17,12 +16,10 @@ import type {
   Position,
   Pressure,
   PublicConfig,
-  QuantResponse,
   Readiness,
   RidpReport,
   ScanBar,
   ScanState,
-  Scoreboard,
   StockNews,
   SymbolMeta,
   VwapPoint,
@@ -115,11 +112,7 @@ export const api = {
   stockNews: (symbol: string) =>
     req<StockNews>(`/api/stock-news?symbol=${encodeURIComponent(symbol)}`),
 
-  // Quant pipeline (dip-driven AI team) on the Claude paper account.
-  quant: () => req<QuantResponse>("/api/quant"),
-
-  // Dip+Rise desk (Agent 2 dips + rise watcher) — its own paper account.
-  diprise: () => req<DipRiseReport>("/api/diprise"),
+  // SURGER v2 lab — 3 continuation detectors, srg*_ order attribution.
   surger: () => req<SurgerReport>("/api/surger"),
 
   // RIDP two-strategy deterministic paper desk (Rider & Dipper).
@@ -128,13 +121,7 @@ export const api = {
   // RBT VAE + GARCH + LightGBM mean reversion paper desk.
   rbt: () => req<{ enabled: boolean; report?: any }>("/api/rbt"),
 
-  // SNDK 1-Minute Micro-Scalper paper desk.
-  sndk: () => req<{ enabled: boolean; report?: any }>("/api/sndk"),
-
   breadcrumbs: () => req<{ enabled: boolean; report?: any }>("/api/breadcrumbs"),
-
-  // Eval scoreboard (rolling strategy expectancy + judge calibration).
-  evals: () => req<Scoreboard>("/api/evals"),
 
   // DECEPTICON
   decepticonWatchlist: () => req<DecepticonWatchlist>("/api/decepticon/watchlist"),

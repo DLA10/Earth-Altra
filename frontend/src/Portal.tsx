@@ -4,19 +4,16 @@ import { Decepticon } from "./Decepticon";
 import { TradeHistory } from "./TradeHistory";
 import { Watchlist } from "./Watchlist";
 import { Metrics } from "./Metrics";
-import { Quant } from "./Quant";
-import { DipRise } from "./DipRise";
 import { Ridp } from "./Ridp";
 import { Rbt } from "./Rbt";
 import { Movers } from "./Movers";
-import { Sndk } from "./Sndk";
 import { Surger } from "./Surger";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { OrderAlerts } from "./components/OrderAlerts";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { api } from "./api/client";
 
-type View = "execution" | "watchlist" | "decepticon" | "history" | "metrics" | "paper-claude" | "diprise" | "ridp" | "rbt" | "sndk" | "surger" | "breadcrumbs" | "movers";
+type View = "execution" | "watchlist" | "decepticon" | "history" | "metrics" | "ridp" | "rbt" | "surger" | "breadcrumbs" | "movers";
 
 // Portal is the single app shell. It switches between the live execution engine and
 // the DECEPTICON scanner without leaving the app — same backend, same session, same
@@ -72,20 +69,11 @@ export default function Portal() {
           <button className={view === "metrics" ? "on" : ""} onClick={() => setView("metrics")}>
             <i className="ti ti-chart-bar" aria-hidden="true" /> Metrics
           </button>
-          <button className={view === "paper-claude" ? "on" : ""} onClick={() => setView("paper-claude")}>
-            <i className="ti ti-robot" aria-hidden="true" /> Paper · Claude
-          </button>
-          <button className={view === "diprise" ? "on" : ""} onClick={() => setView("diprise")}>
-            <i className="ti ti-wave-sine" aria-hidden="true" /> Dip+Rise
-          </button>
           <button className={view === "ridp" ? "on" : ""} onClick={() => setView("ridp")}>
             <i className="ti ti-mountain" aria-hidden="true" /> RIDP
           </button>
           <button className={view === "rbt" ? "on" : ""} onClick={() => setView("rbt")}>
             <i className="ti ti-activity" aria-hidden="true" /> Paper · RBT
-          </button>
-          <button className={view === "sndk" ? "on" : ""} onClick={() => setView("sndk")}>
-            <i className="ti ti-bolt" aria-hidden="true" /> Paper · SNDK
           </button>
           <button className={view === "surger" ? "on" : ""} onClick={() => setView("surger")}>
             <i className="ti ti-trending-up" aria-hidden="true" /> SURGER
@@ -103,11 +91,8 @@ export default function Portal() {
         {view === "decepticon" && <Decepticon />}
         {view === "history" && <TradeHistory />}
         {view === "metrics" && <Metrics />}
-        {view === "paper-claude" && <Quant />}
-        {view === "diprise" && <DipRise />}
         {view === "ridp" && <Ridp />}
         {view === "rbt" && <Rbt />}
-        {view === "sndk" && <Sndk />}
         {view === "surger" && <Surger />}
         {view === "breadcrumbs" && <Breadcrumbs />}
       </div>
