@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +22,6 @@ import (
 	"live-optimus/backend/internal/flow"
 	"live-optimus/backend/internal/gemini"
 	"live-optimus/backend/internal/hub"
-	"live-optimus/backend/internal/quant"
 	"live-optimus/backend/internal/scanner"
 	"live-optimus/backend/internal/watchlist"
 )
@@ -58,25 +55,15 @@ type Server struct {
 	// Order-flow tracker (buyer/seller-initiated volume).
 	Flow *flow.Tracker
 
-	// Quant is the dip-driven AI pipeline (Agent 2/3 + allocator) on the Claude paper account.
-	// Read-only here; nil-safe.
-	Quant *quant.Engine
-
 	// Gemini writes the on-click "why is it moving" summary for the movers news dropdown.
 	// Nil-safe / disabled-safe; never on the order path.
 	Gemini *gemini.Client
-
-	// Evals returns the current eval scoreboard (nil-safe; set by main).
-	Evals func() interface{}
 
 	// Ridp returns the RIDP two-strategy paper desk report (nil-safe; set by main).
 	Ridp func() interface{}
 
 	// Rbt returns the RBT paper desk report (nil-safe; set by main).
 	Rbt func() interface{}
-
-	// Sndk returns the SNDK paper desk report (nil-safe; set by main).
-	Sndk func() interface{}
 
 	// Breadcrumbs returns the Breadcrumbs generalized-scalper desk report (nil-safe; set by main).
 	Breadcrumbs func() interface{}
@@ -242,58 +229,14 @@ func (s *Server) Routes(r chi.Router) {
 	r.Get("/api/decepticon/scan", s.decepticonScan)
 	r.Get("/api/decepticon/bars", s.decepticonBars)
 
-	// Quant pipeline (the AI paper-trading team): full report for the Paper·Claude page.
-	r.Get("/api/quant", s.quantReport)
-	r.Get("/api/diprise", s.dipRiseReport)
+	// Paper desk reports (read-only pages).
 	r.Get("/api/ridp", s.ridpReport)
 	r.Get("/api/rbt", s.rbtReport)
-	r.Get("/api/sndk", s.sndkReport)
 	r.Get("/api/breadcrumbs", s.breadcrumbsReport)
 	r.Get("/api/surger", s.surgerReport)
 	r.Get("/api/regime", s.regimeReport)
 	r.Get("/api/moverwatch", s.moverWatchReport)
 
-	// Eval scoreboard (per-strategy expectancy, demotions, judge calibration).
-	r.Get("/api/evals", func(w http.ResponseWriter, r *http.Request) {
-		if s.Evals == nil {
-			writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
-			return
-		}
-		writeJSON(w, http.StatusOK, s.Evals())
-	})
-
-	// Research-loop proposals (ml/research_loop.py): the newest pending batch, or
-	// {"pending": []} when none exist yet. Read-only — proposals are always applied by
-	// the operator manually, never from here.
-	r.Get("/api/proposals", s.latestProposals)
-}
-
-func (s *Server) latestProposals(w http.ResponseWriter, r *http.Request) {
-	empty := map[string]interface{}{"pending": []interface{}{}}
-	dir := filepath.Join("data", "evals")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, empty)
-		return
-	}
-	latest := ""
-	for _, e := range entries {
-		if n := e.Name(); strings.HasPrefix(n, "proposals_") && strings.HasSuffix(n, ".json") && n > latest {
-			latest = n
-		}
-	}
-	if latest == "" {
-		writeJSON(w, http.StatusOK, empty)
-		return
-	}
-	b, err := os.ReadFile(filepath.Join(dir, latest))
-	if err != nil {
-		writeJSON(w, http.StatusOK, empty)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
 }
 
 func (s *Server) symbols() []string {
