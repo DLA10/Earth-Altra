@@ -1,8 +1,7 @@
 // Package surger runs the SURGER v2 experiment: three continuation detectors validated
 // across four backtest windows (2026-03..07, 97 sessions — see SURGER_V2.md), deployed
-// LIVE on the dip+rise paper account with strict order attribution (srg1_/srg2_/srg3_
-// client-order-id prefixes) so the three variants and the dip+rise desk can never be
-// confused with each other.
+// LIVE on the PAPER_DIP paper account with strict order attribution (srg1_/srg2_/srg3_
+// client-order-id prefixes) so the three variants can never be confused with each other.
 //
 // This file is the detector math: an exact Go port of the validated Python harness
 // (scratchpad surger_lab.py feats_basic + the C2 / C1 / SPECTRAL definitions), including

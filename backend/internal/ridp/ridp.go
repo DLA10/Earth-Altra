@@ -14,8 +14,8 @@
 // Design rules (all deliberate): 100% deterministic — NO LLM anywhere on the trade path;
 // budget management is pure code (allocator below); trades on its OWN paper account
 // (PAPER_RIDP_* keys — strict one account per desk since 2026-07-16) via the
-// quant.Broker wrapper with "ridp_" client-order-id prefixes so P&L attribution never
-// mixes with the AI quant desks (which run untouched, side by side).
+// quant.Broker wrapper (that package is now just the shared paper-broker client) with
+// "ridp_" client-order-id prefixes for P&L attribution.
 // Every decision journals to data/ridp/<day>.jsonl; open state persists to
 // data/ridp/state.json and is rehydrated (and broker-verified) after a restart.
 package ridp

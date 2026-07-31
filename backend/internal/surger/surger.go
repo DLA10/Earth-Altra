@@ -1,13 +1,14 @@
-// SURGER desk manager: three detector variants trading LIVE paper on the dip+rise
-// account (PAPER_DIP keys). The account is SHARED, so the invariants here are stricter
-// than the dedicated-account desks:
+// SURGER desk manager: three detector variants trading LIVE paper on the PAPER_DIP
+// account. That account was shared with the dip+rise desk until it was removed
+// 2026-07-31; SURGER now owns it outright (the key names were kept deliberately — no
+// migration risk to a live book). The strict invariants are RETAINED anyway, because
+// the three variants still share one account with each other:
 //
-//  1. ATTRIBUTION — every order carries an srg<variant>_ client-order-id prefix. The
-//     quant desk's Reconstruct filters on its own QuantDip__ prefix and its Rehydrate
-//     skips foreign-desk prefixes, so the books can never bleed into each other.
+//  1. ATTRIBUTION — every order carries an srg<variant>_ client-order-id prefix, so the
+//     three books can never bleed into each other.
 //  2. EXCLUSIVITY — a symbol is entered only if (a) no SURGER variant holds or is
-//     entering it, and (b) the ACCOUNT holds zero shares of it (so we can never touch
-//     a dip+rise position, and an opposite-side resting order can never wash-trade us).
+//     entering it, and (b) the ACCOUNT holds zero shares of it (so an opposite-side
+//     resting order can never wash-trade us, and any orphaned share blocks entry).
 //  3. NO GHOSTS — every order is journaled BEFORE placement and settled to a TERMINAL
 //     state after; entries book exactly the filled quantity; exits sell exactly OUR
 //     quantity (never account-wide on a shared account); unfinished orders are settled
@@ -158,12 +159,12 @@ func (m *Manager) Enabled() bool { return m != nil && m.broker.Enabled() }
 // protection, then runs the 5s upkeep loop (stop-fill detection, EOD flatten).
 func (m *Manager) Start(ctx context.Context) {
 	if !m.Enabled() {
-		log.Printf("surger: disabled (dip+rise broker not enabled)")
+		log.Printf("surger: disabled (PAPER_DIP broker not enabled)")
 		return
 	}
 	m.settleInflightBoot()
 	m.rehydrate()
-	log.Printf("surger: started LIVE(paper, dip+rise account) — 3 variants, $%.0f/slice, %d slots each, universe %d, exits C2 %.1f%%→%.1f%% | C1 %.1f%%→%.1f%% | SPECTRAL %.1f%%→%.1f%%",
+	log.Printf("surger: started LIVE(paper, PAPER_DIP account) — 3 variants, $%.0f/slice, %d slots each, universe %d, exits C2 %.1f%%→%.1f%% | C1 %.1f%%→%.1f%% | SPECTRAL %.1f%%→%.1f%%",
 		m.notional, m.slots, len(m.universe),
 		trailWide[VarC2]*100, trailTight[VarC2]*100,
 		trailWide[VarC1]*100, trailTight[VarC1]*100,
@@ -285,7 +286,7 @@ func (m *Manager) enter(vi int, sym string, signalPx float64) {
 		if err != nil {
 			m.journal(vi, "skip", sym, "exclusivity check unreadable ("+err.Error()+") — skipping to stay safe")
 		} else {
-			m.journal(vi, "skip", sym, fmt.Sprintf("account already holds %.0f (dip+rise or sibling) — exclusivity skip", aq))
+			m.journal(vi, "skip", sym, fmt.Sprintf("account already holds %.0f (sibling variant or orphan) — exclusivity skip", aq))
 		}
 		return
 	}
@@ -622,7 +623,7 @@ func (m *Manager) tick() {
 	m.mu.Lock()
 	m.tickN++
 	pollStops := m.tickN%3 == 0 // 15s stop-status cadence: the account's API budget is
-	// SHARED with the whole dip+rise desk — 5s polling across 15 positions would eat it
+	// SHARED across all three variants — 5s polling across 15 positions would eat it
 	var checks []check
 	for vi := range m.books {
 		for sym, p := range m.books[vi].Open {
@@ -956,7 +957,7 @@ func (m *Manager) Report() interface{} {
 		"notional": m.notional,
 		"slots":    m.slots,
 		"universe": len(m.universe),
-		"note":     "runs on the dip+rise paper account; srg*_ coids keep books separate; account day P&L is shared",
+		"note":     "runs on the PAPER_DIP paper account (SURGER owns it since 2026-07-31); srg*_ coids keep the three books separate",
 		"variants": variants,
 	}
 }

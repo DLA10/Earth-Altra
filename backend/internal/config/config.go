@@ -81,13 +81,13 @@ type Config struct {
 	BreadcrumbsRetrainDays int      // retrain staleness threshold in days (operator 2026-07-25: weekly)
 	BreadcrumbsLossCap     float64  // halt NEW entries once the day's realized P&L ≤ -cap (USD, 0 = disabled)
 	BreadcrumbsCutUSD      float64  // live $-cut experiment: flatten any position at -N USD unrealized (0 = off)
-	// Dip+rise desk (Agent 2 dip entries + the rise watcher — one strategy family, both
-	// fed by the Telegram dip watcher). Runs on its OWN paper account, separate from the
-	// signal pipeline's PAPER_CLAUDE account. Empty keys = the family stays shadow.
+	// PAPER_DIP account. LEGACY NAME: it belonged to the dip+rise desk, removed
+	// 2026-07-31. SURGER now owns this account outright; the key names were kept so no
+	// live book had to migrate. Empty keys = SURGER stays off.
 	PaperDipKey    string
 	PaperDipSecret string
 	// SURGER v2 lab: three validated continuation detectors trading live paper on the
-	// dip+rise account with srg*_ coid attribution (see SURGER_V2.md).
+	// PAPER_DIP account with srg*_ coid attribution (see SURGER_V2.md).
 	SurgerLive     bool    // run the SURGER lab (needs PAPER_DIP keys)
 	SurgerNotional float64 // per-trade slice USD
 	SurgerSlots    int     // max concurrent positions PER VARIANT
