@@ -62,7 +62,8 @@ Alpaca Data REST  ────┘      │  alpaca.Client  → one SIP stream (t
                              └──────────────────────────────────────────────────────┘
                                             ▲                    │ /ws + /api/*
 React + TypeScript (:5173, Vite) ───────────┘◄───────────────────┘
-   Portal shell → Execution | Watchlist | DECEPTICON | History | Metrics | Paper·Claude | RIDP
+   Portal shell → Execution | Movers | Watchlist | DECEPTICON | History | Metrics |
+                   RIDP | RBT | SURGER | Breadcrumbs
 ```
 
 **Live price path (sub-second):** Alpaca trade tick → `candles.Engine.OnTrade` folds it
@@ -82,20 +83,20 @@ symbols subscribe live without a reconnect.
 ```
 backend/
   cmd/server/main.go        wiring: config, stream loop, pollers, all desks, HTTP server
-  cmd/backtest/main.go      replay historical bars through the signal strategies (read-only)
   internal/
     alpaca/                 SDK wrapper + JSON DTOs (client, stream, types, news, screener)
     api/                    chi REST handlers + server-side order validation
     candles/                in-memory OHLCV engine (1/5/10m), bad-tick guard
     config/                 env/.env loading (secrets stay server-side)
-    dipwatch/               Telegram dip+bounce alert bot (read-only; feeds quant)
+    dipwatch/               Telegram dip+bounce alert bot (read-only, log+alert only)
     execsym/                persisted symbol set: base + added − hidden
     flow/                   buy/sell order-flow estimator (quote rule)
     gemini/                 rate/budget-capped Gemini client ("why is it moving" summaries)
     hub/                    WebSocket fan-out, per-client (symbol,timeframe) subscription
     moverwatch/             SHADOW recorder: Movers "Risers" table + green-signal price
                             series at 15-min marks 09:45–16:00 ET (log-only, no orders)
-    quant/                  AI quant pipelines: signal desk + dip/rise desk (see §13)
+    quant/                  ⚠ NAME IS LEGACY — now ONLY the shared Alpaca paper-broker
+                            client (broker.go) used by ridp/rbt/surger/breadcrumbs (§13)
     ridp/                   RIDP deterministic paper desk: RIDER + DIPPER + REVERTER, no
                             LLM on the trade path, own journal under data/ridp/. REVERTER
                             (−1.5σ dip below 15-min mean, exit at mean, z=−4 floor, flat
@@ -106,19 +107,17 @@ backend/
                             2026-08-01/02 weekend. Evidence in REVERTER_FILTERS.md /
                             RIDP_REVERTER_FIXES.md
     rbt/                    RBT pairs/mean-reversion paper desk (see §14)
-    sndk/                   SNDK 1-min micro-scalper paper desk (see §14)
-    surger/                 SURGER v2: 3 continuation detectors on the dip+rise account (§14)
+    surger/                 SURGER v2: 3 continuation detectors, own page + account (§14)
     breadcrumbs/            generalized volatility-scalper paper desk (see §14)
-    risk/                   deterministic guardrails (loss cap, sizing, concurrency) — paper only
-    signals/                multi-strategy intraday signal engine + backtester (paper/shadow)
+    universe/               loads QUANT_UNIVERSE.json (RIDP/SURGER/REGIME/RBT + SIP bars)
     scanner/                DECEPTICON per-ticker scan metrics
     watchlist/              parses EVENT_DRIVEN_WATCHLIST.md → departments/tickers
-  data/                     runtime state (gitignored): symbol sets, daily_universe.json,
-                            decisions/, signals/, reviews/, ridp/, rbt/, sndk/, breadcrumbs/
+  data/                     runtime state (gitignored): symbol sets, ridp/, rbt/,
+                            breadcrumbs/, surger/, regime/, moverwatch/, _archive/
 frontend/src/
   Portal.tsx                app shell + tab router + global SymbolSearch + OrderAlerts
   App.tsx                   Execution ("Optimus") page (ExecutionEngine)
-  Watchlist.tsx / Decepticon.tsx / Quant.tsx / Ridp.tsx / Metrics.tsx / TradeHistory.tsx
+  Watchlist.tsx / Decepticon.tsx / Surger.tsx / Ridp.tsx / Metrics.tsx / TradeHistory.tsx
   indicators.ts             Bollinger + RSI math + signal grading
   costBasis.ts              average-cost reconstruction + realized trades
   marketStatus.ts           client-side US market phase
@@ -172,17 +171,14 @@ scripts/                    PowerShell launchers · START-Live-Optimus.bat  one-
 - **`api`** — chi handlers + **server-side order validation** (`validateOrder`,
   `checkSellable`), on-demand `EnsureLive`/`activateSymbol`. Endpoints in §10.
 
-- **`quant` + `signals`** — the AI quant team: TWO desks on two paper accounts (§13.9),
-  sharing Agent 3 exits, Agent 4 sentiment (optional), Strategist, scoreboard, Reviewer.
-  Signal desk: six deterministic detectors over QUANT_UNIVERSE → `SignalTrader` gauntlet
-  (§13.2) → shared `Manager` (market entry, trailing-stop floor, Agent 3 exit loop, 15:55
-  flatten, `Rehydrate` on restart; positions carry an `EntryContext` so exits know intent
-  and P&L attributes per pipeline). Dip/rise desk: Telegram dips → Agent 2 buy/no-buy;
-  declined dips arm the deterministic rise watcher (`risewatch.go`, a REGIME tool — live
-  only under cautious/corrective posture via `QUANT_RISE_LIVE`). Governance: pre-market
-  Strategist → `daily_universe.json`, post-close Reviewer, eval-scoreboard demotion (with
-  a 5-outcome probation fast-path), nightly clf retrain, daily research loop
-  (human-gated). Every decision → JSONL in `data/decisions/`. Model proposes, Go disposes.
+- **`quant`** — ⚠ legacy name: since 2026-07-31 this package holds ONLY `broker.go`,
+  the shared Alpaca paper-broker REST client (orders, account, positions, open orders)
+  used by RIDP (+Guardian), RBT, SURGER and Breadcrumbs. Renaming it to `paperbroker`
+  is a safe mechanical follow-up; deleting it breaks four live desks.
+
+- **`universe`** — loads `QUANT_UNIVERSE.json` (also legacy-named). Supplies the SIP
+  bar-subscription set, RIDP's universe, SURGER's tradables and the regime detector's
+  symbol list. `universe_test.go` guards against a malformed/BOM'd file booting empty.
 
 - **`risk`** — deterministic guardrails shared by backtester and paper desks: daily loss
   cap, per-trade sizing, concurrency, overnight cap. Never wired to the real-money path.
@@ -193,9 +189,8 @@ scripts/                    PowerShell launchers · START-Live-Optimus.bat  one-
 
 `main.go` wires everything: config → verify keys → engine/hub/managers → backfill → seed
 scanner + signal engine → SIP stream loop (auto-reconnect, re-backfill) → quant block
-(only arms when `PAPER_CLAUDE_*` set; each governance piece independently flag-gated) →
-evals refresh → research loop → dip watcher → RIDP/RBT/SNDK/Breadcrumbs desks (each only
-with its OWN keys) → account poller (2–3s) → HTTP server.
+→ dip watcher (Telegram alerts) → RIDP/RBT/Breadcrumbs/SURGER desks (each only with its
+OWN keys) → account poller (2–3s) → HTTP server.
 
 ---
 
@@ -220,10 +215,10 @@ full-size `LiveChart`s (each opens its own WebSocket); drag `⠿` to reorder.
 catalyst radar, `MiniChart` heatmap. Click any tile → `ChartModal` (live WS chart, any
 symbol incl. market movers). MarketMovers panel shows whole-market gainers/losers.
 
-**Paper · Claude (`Quant.tsx`)** — read-only quant report (polls `/api/quant` +
-`/api/evals` 5s): P&L cards, allocator budget vs real equity, team P&L by pipeline, agent
-roster (actual configured models from the backend), strategy scoreboard, dip scorecard,
-Agent-3 exit attribution, open/closed trades, daily review.
+**SURGER (`Surger.tsx`)** — the 3-detector continuation lab (C2 cusum / C1 purity /
+SPECTRAL): per-variant P&L + win rate cards, open positions with stop/peak/entry-slip,
+and the last 25 closed trades with exit reasons. Polls `/api/surger` every 3s. Promoted
+from a panel inside the retired Dip+Rise page on 2026-07-31.
 
 **RIDP (`Ridp.tsx`)** — Rider/Dipper/Reverter desk report; open-position P&L marked live
 to the WS quote stream between 3s polls.
@@ -302,37 +297,12 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `DECEPTICON_ENABLED` | `true` | Scanner page/stream |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_RPM` / `GEMINI_DAILY_CAP` | — / flash / 8 / 200 | Movers-news summaries |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Dip-watcher alerts |
-| `PAPER_CLAUDE_KEY/SECRET` | — | SIGNAL desk paper account |
-| `PAPER_DIP_KEY/SECRET` | — | DIP+RISE desk paper account (empty = family shadow) |
 | `PAPER_RIDP_KEY/SECRET` | — | RIDP desk account (empty = OFF; one account per desk) |
+| `PAPER_DIP_KEY/SECRET` | — | **SURGER's account** (legacy name — the dip desk it belonged to was removed 2026-07-31) |
 | `PAPER_RBT_KEY/SECRET` | — | RBT desk account (empty = OFF) |
-| `PAPER_SNDK_KEY/SECRET` | — | SNDK scalper account (empty = benched) |
 | `PAPER_BREADCRUMBS_KEY/SECRET` | — | Breadcrumbs desk account (empty = OFF) |
-| `ANTHROPIC_API_KEY` | — | Quant agents (idle when empty) |
-| `CLAUDE_SYMBOLS` | `SNDK,MU` | Always-streamed quant symbols (+ SPY/QQQ) |
-| `QUANT_ENTRY_MODEL` / `QUANT_EXIT_MODEL` / `QUANT_REVIEW_MODEL` | haiku/haiku/opus | Agent models |
-| `QUANT_TRAIL_PCT` | `1.5` | Deterministic trailing-stop floor % |
-| `QUANT_EXIT_GRACE_MIN` | `10` | Agent 3 not consulted for a position's first N min |
-| `QUANT_EXIT_LLM` | `true` (env: false) | false = post-grace exits are rail-F math only (not-green-30m, stale-90m, 1.2%→0.6% tighten, $10/$4 lock) — Agent 3 replaced 2026-07-25 |
-| `QUANT_BREAKEVEN_R` / `QUANT_CHK_HALF_R` / `QUANT_CHK_FULL_R` / `QUANT_EXIT_NOISE_R` | `0.5/0.75/0.5/0.25` | Mechanical exit rails in R units (0 disables each) |
-| `QUANT_LIVE` | `true` | `false` = DIP+RISE desk shadow only (does NOT bench the signal desk or RIDP — each has its own flag) |
-| `QUANT_OVERNIGHT_CAP` | `0` | Keep ≤1 profitable position overnight up to this (0 = flatten all) |
-| `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Signal-engine universe override |
-| `QUANT_SIGNALS_LIVE` | `true` | Signal-engine entries to paper broker (false = shadow). **env=false since 2026-07-25: AI team BENCHED by operator** — engine still journals signals+counterfactuals, zero LLM calls |
-| `QUANT_REVIEWER` | `true` | Daily post-close LLM review (env=false since 2026-07-25 — was ungated before) |
-| `QUANT_JUDGE_MODEL` | `claude-haiku-4-5` | Signal entry judge |
-| `QUANT_DAILY_LOSS_CAP` | `150` | Halt new signal entries at −cap |
-| `QUANT_TOD_GATE` | `false` | Time-of-day gate (default shadow-only) |
-| `QUANT_RISE_LIVE` | `false` | Rise watcher places paper orders (currently true in .env — corrective-regime slot) |
-| `QUANT_ALIGN_GATE` | `true` | Trend-alignment gate (throughput mode blocks only proven-negative cells; `QUANT_ALIGN_STRICT=true` = original playbook; see THROUGHPUT_MODE.md) |
+| `QUANT_UNIVERSE_PATH` | `QUANT_UNIVERSE.json` | Universe file override (legacy name; feeds RIDP/SURGER/REGIME/RBT + SIP bars) |
 | `RIDP_LIVE` | `true` | RIDP desk places paper orders (false = shadow) |
-| `QUANT_CLF_GATE` | `true` | ML entry gate (fail-open without fresh models) |
-| `QUANT_CLF_MARGIN` | `0.0` | clf expected-R margin (pre-registered original 0.03) |
-| `QUANT_RETRAIN` | `true` | Nightly clf retrain ~17:05 ET + boot catch-up |
-| `QUANT_STRATEGIST` / `QUANT_STRATEGIST_MODEL` | `true` / opus | Pre-market posture/budget agent |
-| `RESEARCH_LOOP` | `true` | Daily 13:30 ET research proposals → Telegram (never auto-applied) |
-| `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` | localhost:11434 / gemma2:2b | Agent 4 sentiment |
-| `QUANT_SENTIMENT` | `true` | `false` = never wire Agent 4 |
 | `BC_LIVE` | `true` | Breadcrumbs places paper orders (false = shadow) |
 | `BC_UNIVERSE` | 22-name volatile basket | Breadcrumbs basket |
 | `BC_BUDGET` / `BC_NOTIONAL` / `BC_MAX_SLOTS` | `200000/2000/0` | Budget / slice / slots (0 = one per symbol). .env currently runs notional 5000 |
@@ -368,8 +338,7 @@ dirs. Browser `localStorage`: `lo.execOrder`/`lo.watchOrder`, `lo.indicators`,
 | GET | `/movers?top` · `/movers-news?top` · `/stock-news?symbol` | screener / news badges / headlines+AI summary |
 | GET | `/quotes` · `/rvol?symbol` · `/news?symbols` · `/pressure?symbol` | quotes / RVOL / news / buy-sell pressure |
 | GET | `/activities?days&limit` · `/fills?days` | fill log / full-window fills |
-| GET | `/quant` · `/evals` · `/proposals` | quant report / scoreboard / research proposals |
-| GET | `/ridp` · `/rbt` · `/sndk` · `/breadcrumbs` · `/surger` · `/regime` · `/moverwatch` | per-desk / shadow reports |
+| GET | `/ridp` · `/rbt` · `/breadcrumbs` · `/surger` · `/regime` · `/moverwatch` | per-desk / shadow reports |
 | GET | `/decepticon/watchlist` · `/decepticon/scan` · `/decepticon/bars?symbol` | scanner |
 
 ---
@@ -381,8 +350,6 @@ dirs. Browser `localStorage`: `lo.execOrder`/`lo.watchOrder`, `lo.indicators`,
 .\scripts\run-backend.ps1           # go run ./cmd/server  → :8080
 cd frontend; npm install; ..\scripts\run-frontend.ps1   # vite dev → :5173
 # One-click: START-Live-Optimus.bat
-# Strategy backtest (read-only; bars cached in data/btcache/, safe to delete):
-cd backend; go run ./cmd/backtest -days 21   # (-sweep, -mlgate, -dataset variants exist)
 ```
 
 Checks before considering a change done — backend (from `backend/`):
@@ -416,112 +383,91 @@ counts. History works when the market is closed; live ticks only during trading 
 
 ---
 
-## 13. Live AI quant team — operations & debugging playbook
+## 13. Paper-desk operations & debugging playbook
 
-> **Standing golden rule:** the AI quant desk is **paper only**. Never touch the Execution
-> page or the live order path while debugging it. Restart the backend after code changes —
+> **Standing golden rule:** every desk below is **paper only**. Never touch the Execution
+> page or the live order path while debugging one. Restart the backend after code changes —
 > a long-running binary predates them.
+
+**The AI quant team was REMOVED on 2026-07-31** (signal desk, dip+rise desk, all LLM
+agents, ML gate, strategist, reviewer, research loop, evals scoreboard) along with the
+SNDK desk. The system now makes **zero LLM calls**. History and rationale:
+[DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md) · [SNDK_RETIREMENT.md](SNDK_RETIREMENT.md) ·
+[AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md). Code is recoverable from git at
+`1c1b710~1`. `QUANT_EXPLAINED.md`, `QUANT_VISION.md` and `STRATEGY_ENGINE.md` describe the
+removed system and are kept as historical documents only.
+
+Two names survive the removal and are **load-bearing — do not "clean them up"**:
+- **`internal/quant`** now contains ONLY `broker.go`, the shared Alpaca paper-broker
+  client that RIDP (+Guardian), RBT, SURGER and Breadcrumbs all run on.
+- **`QUANT_UNIVERSE.json`** + `cfg.QuantUniverseCandidates` feed RIDP, SURGER, the regime
+  detector, RBT's baseline and the SIP bar subscription (`internal/universe`).
 
 ### 13.1 Daily clock (all times **America/New_York**)
 
 | Time (ET) | What fires | Where |
 |---|---|---|
-| boot | clf gate load+parity · equity sync · `Rehydrate` · Strategist catch-up | `main.go` quant block |
-| 08:50–09:25 | **Strategist** writes `daily_universe.json` (posture+budget) | `strategist.go` |
-| 09:30–15:30 | signals → gauntlet → paper entries (nothing fresh after 15:30) | `signaltrader.go` |
-| every 10 min | **eval scoreboard** recompute → auto-demote/reinstate | `evals.Compute` |
-| every 60 s | allocator budget re-synced to real account equity | `qBroker.Account` |
-| 13:30–13:40 | **research loop** → Telegram (proposals only) | `research_loop.py` |
+| boot | per-desk rehydrate/reconcile; Breadcrumbs retrain catch-up if stale | `main.go` desk blocks |
+| 09:30–15:30 | RIDP (reverter/rider/dipper), Breadcrumbs, SURGER entries | per desk |
+| 09:45–16:00 | moverwatch journals the Risers table every 15 min | `moverwatch.go` |
+| 11:31 | regime detector publishes its afternoon call | `regime.go` |
 | 15:50–16:00 | **RBT** once-daily scan window | `rbt.go` |
-| 15:55 | quant Manager **flattens** (one overnight winner ≤ cap may ride) | `manager.go` |
-| ≥16:10 | **Reviewer** writes `data/reviews/<day>.json` | `review.go` |
-| 17:05–17:20 | **nightly retrains**: clf gate (`train_live.py`) + RBT (`rbt_train.py`) | retrain goroutines |
+| 15:55 | SURGER + RIDP EOD flatten | per desk |
+| 15:59 | Breadcrumbs EOD flatten | `breadcrumbs.go` |
+| 16:05 | regime detector scores the day | `regime.go` |
+| 17:05 | Breadcrumbs weekly rolling retrain (when stale) · RBT nightly retrain | retrain goroutines |
 
-### 13.2 The signal-trader gauntlet (exact order — every skip is journaled with a reason)
+### 13.2 Fail-open / fail-closed (so "not trading" isn't misdiagnosed)
 
-`OnSignal → handle`: **(0)** trend-alignment playbook (`QUANT_ALIGN_GATE`) → **(1)** TOD
-gate (only if `QUANT_TOD_GATE=true`; default shadow) → **(2)** scoreboard demotion
-(computed over allowed-cell outcomes only; probation fast-path: a benched strategy whose
-last 5 counterfactuals are net positive is reinstated immediately) → **(3)** clf gate
-(`Clf.Score ≥ QUANT_CLF_MARGIN`) → **(4)** session guard (no entries after 15:30) →
-**(5)** posture `stand_down` → **(6)** daily loss cap → **(7)** allocator `CanFund`
-(before the LLM call) → **(8)** LLM judge (veto or conviction) → **(9)** cautious posture
-requires conviction ≥ 0.60 → `Size/Fund` → `Manager.OpenPosition`. The dip pipeline skips
-1–3 and 8 (Agent 2 instead) but shares 4–7 and the Manager.
+- **Breadcrumbs ML model** missing/stale → retrains on boot; until then it scores with the
+  old model. Check `model_trained` in `/api/breadcrumbs`.
+- **RBT** scans once daily: distinguish "scan produced 0 signals" (legitimate — read
+  `data/rbt/signals_today.json`) from "scan never ran" (its mtime isn't today ~15:50 ET).
+- **SURGER** fires ~0.4×/day by design; flat days are normal and cost nothing.
 
-### 13.3 Fail-open / fail-closed (so "not trading" isn't misdiagnosed)
+### 13.3 Where to look (gitignored `backend/data/`)
 
-- **clf gate**: missing / stale (>7d) / parity-failed models → **fails OPEN**. Check the
-  startup log + `models/clf_meta.json`.
-- **LLM judge**: no `ANTHROPIC_API_KEY` → judge idle, entries proceed at conviction 0.6.
-  A judge error mid-call → that one trade skipped (fail-closed).
-- **Strategist**: LLM failure → rules fallback (QQQ 20-day-MA posture).
-- **Allocator**: equity sync failure → configured budget only. In effect =
-  `min(configured, account equity)`.
+`ridp/<day>.jsonl` + `ridp/trades.jsonl` + `ridp/guardian_<day>.jsonl` (shadow
+counterfactuals) · `rbt/` (models, history CSVs, `signals_today.json`) ·
+`breadcrumbs/state.json` (per-trade `prob`, `signal_px`, `entry_slip_bps`, MFE/MAE) +
+`cutshadow_<day>.jsonl` (the $25-cut control arm) · `surger/` (3 books + journal with
+`exit_slip_bps`) · `regime/<day>.jsonl` · `moverwatch/<day>.jsonl` ·
+`_archive/` (the retired AI desks' journals).
 
-### 13.4 Where to look (gitignored `backend/data/`)
+### 13.4 Common failures → diagnosis
 
-- `decisions/<day>.jsonl` — every decision/order/skip/outcome; skip notes say WHY a signal
-  died; close outcomes carry `{source,pnl,win,conf,held_min}`.
-- `signals/<day>.jsonl` — every published signal + counterfactual outcome (`r_multiple`).
-- `models/clf_meta.json` — gate models + parity rows. `evals/scoreboard.json` — rolling
-  scoreboard. `daily_universe.json` — today's live config. `reviews/<day>.json` — report
-  card. `ridp/<day>.jsonl` + `ridp/trades.jsonl` — RIDP journal. `rbt/` — models, history
-  CSVs, `signals_today.json` (mtime tells you whether the 15:50 scan ran).
-  `breadcrumbs/state.json` — trades with per-trade `prob`, `signal_px`, `entry_slip_bps`,
-  `high_px`/`low_px` attribution.
+1. **A desk is quiet.** Usually normal (slots, gates, windows). Check its journal for
+   skip reasons; rule out a holiday and the desk's own entry window.
+2. **Orphaned positions after restart.** Each desk rehydrates independently: RIDP
+   `rehydrate()` + ghost reconcile, RBT `adoptUntracked`, Breadcrumbs boot reconcile,
+   SURGER in-flight settle. Read the boot log for each.
+3. **Desks interfering.** Every desk runs on its OWN paper account; empty keys = OFF.
+   The ONE exception is SURGER on `PAPER_DIP_*` (key names kept after the dip desk was
+   retired) — it now has that account to itself.
+4. **Cross-desk adoption guard.** The old `foreignDeskPrefixes` list died with the quant
+   Manager. It is no longer needed (each surviving desk owns its account outright), but
+   SURGER — sole occupant of `PAPER_DIP_*` — protects itself by entering only symbols the
+   account holds **zero** of. ⚠ SURGER has **no tests**; add some before changing it.
 
-### 13.5 Common failures → diagnosis
+### 13.5 Kill switches (`.env`, then restart)
 
-1. **"Barely trading."** Usually normal (slots + gauntlet). Check `decisions` skip
-   reasons; rule out holiday, `stand_down`, loss cap, after 15:30, clf rejections.
-2. **"clf gate not filtering."** Models missing/stale/parity-failed → fail-open by
-   design. Retrain: `PYTHONIOENCODING=utf-8 ml/.venv/Scripts/python.exe ml/train_live.py`.
-3. **Stale morning config.** `daily_universe.json` date must equal today; boot catch-up
-   fires only 08:00–15:00 ET; delete a stale file to force defaults.
-4. **Budget looks wrong.** `min(configured, account equity)`; check `/api/quant` `alloc`.
-5. **Agents idle.** `ANTHROPIC_API_KEY` empty → fallbacks (§13.3); Agent 4 needs Ollama.
-6. **Orphaned positions after restart.** `Rehydrate` re-adopts + re-stops; it SKIPS
-   positions whose newest filled buy carries a sibling desk's coid prefix
-   (`ridp_`/`rbt_`/`sndk_`/`srg*`) — on a shared account those are not ours (2026-07-13/14
-   incident).
-7. **Desks interfering.** Every desk runs ONLY on its OWN paper account; empty keys =
-   OFF. Never point two desks at one account — they liquidate each other's shares.
-8. **RBT zero-trade day.** Distinguish "scan produced 0 signals" (legitimate — check
-   `signals_today.json` content) from "scan never ran" (`live_prices.json` mtime ≠ today
-   15:50 ET — the backend was down during the once-daily window).
+`RIDP_LIVE=false` · `BC_LIVE=false` · `SURGER_LIVE=false` · any desk's keys emptied =
+desk OFF.
 
-### 13.6 Kill switches (`.env`, then restart)
+### 13.6 Verify from the shell
 
-`QUANT_SIGNALS_LIVE=false` · `QUANT_CLF_GATE=false` · `QUANT_ALIGN_GATE=false` ·
-`QUANT_RETRAIN=false` · `QUANT_TOD_GATE=true` · `QUANT_STRATEGIST=false` ·
-`RESEARCH_LOOP=false` · `QUANT_LIVE=false` (dip shadow) · `RIDP_LIVE=false` ·
-`BC_LIVE=false` · desk keys emptied = desk OFF.
+`curl localhost:8080/api/ridp` · `/api/rbt` · `/api/breadcrumbs` · `/api/surger` ·
+`/api/regime` · `/api/moverwatch` · `/api/readiness`.
 
-### 13.7 Verify from the shell
-
-`curl localhost:8080/api/quant` · `/api/evals` · `/api/ridp` · `/api/rbt` · `/api/sndk` ·
-`/api/breadcrumbs` · `/api/proposals`.
-
-### 13.8 ⚠ Timezone gotcha (has burned a session)
+### 13.7 ⚠ Timezone gotcha (has burned a session)
 
 **The operator's local wall clock runs AHEAD of New York (+5h).** Before concluding "the
 market is closed" / "X didn't run", convert to ET and check §13.1 — never reason from the
 local clock. Holidays are also not modeled (no live ticks on one — expected).
 
-### 13.9 Two-desk reminder
-
-The quant team is **two desks on two paper accounts**, each with its own allocator
-(equity-capped), Manager (stops/Agent 3/EOD flatten), Rehydrate, and $150/day loss cap:
-**dip+rise desk** (`PAPER_DIP_*`: Agent 2 dips + rise watcher, gated by `QUANT_LIVE` /
-`QUANT_RISE_LIVE`) and **signal desk** (`PAPER_CLAUDE_*`: 6-strategy engine → clf gate →
-judge, gated by `QUANT_SIGNALS_LIVE`). Shared and stateless across both: Agent 3, Agent 4,
-Strategist, scoreboard, Reviewer. Attribute P&L per pipeline via source tags; per desk via
-the report's `desks` array (broker-level truth).
-
 ---
 
-## 14. Independent paper scalper desks (current state, 2026-07-20)
+## 14. Independent paper desks (current state, 2026-07-31)
 
 All paper-only, one Alpaca paper account each, zero contact with the live path.
 
@@ -549,14 +495,10 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   prices the universe via one REST snapshot (`SetDaySnapFn`) so universe size adds
   nothing to the SIP stream; streams only HELD positions. Entry `|z_spread| ≥ 2.0`, LGBM
   prob ranks the top-5 slots; 1.5×ATR stop; nightly retrain 17:05 (45-min timeout).
-- **SNDK** (`internal/sndk`): single-name 1-min scalper (±$8 exits, 5-min time exit,
-  qty 2). Hardened 2026-07-20 against phantom exits: exits sell the FULL account qty,
-  confirm `PositionQty`==0 before clearing the book, and a per-cycle **orphan sweep**
-  flattens untracked shares (canceling resting orders first). The 4-day ~32-share ghost
-  pile was cleaned by the sweep on 2026-07-20; equity==cash again.
 - **SURGER** (`internal/surger`): 3 intraday continuation detectors (C2 cusum / C1
-  purity / SPECTRAL) over the 534-name quant universe, deployed 2026-07-21. The ONE
-  deliberate shared-account exception: runs on the DIP+RISE paper account with strict
+  purity / SPECTRAL) over the 534-name universe, deployed 2026-07-21. Has its own page
+  since 2026-07-31 and now owns the `PAPER_DIP_*` account outright (the dip desk it used
+  to share it with was removed); still uses strict
   `srg1_/srg2_/srg3_` coid attribution (quant Rehydrate skips `srg*`; dip P&L keys off
   `QuantDip__`); enters only symbols the account holds zero of. Completed-bar signals,
   RTH-only feature windows, entries 10:00–15:30 ET (main detectors fire from ~11:30;

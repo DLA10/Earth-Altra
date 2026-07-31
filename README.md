@@ -1,17 +1,31 @@
-# Earth-Altra: Real-Time Trading Terminal & Agentic Quant System with ML pipelines
+# Earth-Altra: Real-Time Trading Terminal & Deterministic Paper-Trading Desks
 
 A trading platform with two halves. A user trades **real money** through a fast,
-safety-first terminal; on top of it runs an **autonomous artificial-intelligence quant
-desk** that trades a **separate simulated (paper) account entirely by itself** — finding
-setups with plain-rule strategies, filtering them with a machine-learning model, sizing
-and managing them with a team of language-model agents, and holding every idea to an
-**evaluation framework whose only job is to kill what does not work before it can ever
-risk money.**
+safety-first terminal; alongside it run several **deterministic paper-trading desks** on
+separate simulated accounts — finding setups with plain-rule strategies and machine-learned
+gates, managing them with mechanical stops and exits, and holding every idea to a
+**pre-registered evaluation discipline whose only job is to kill what does not work before
+it can ever risk money.**
 
-> **The one hard rule:** the user's money is real; **Everything the AI Agents do is on a paper account with its own separate keys.** There is no code
-> path from any model or agent to the real account. Nothing here is financial advice.
+> **The one hard rule:** the user's money is real; **everything the desks do is on paper
+> accounts with their own separate keys.** There is no code path from any desk to the real
+> account. Nothing here is financial advice.
 
-## Personal project: Markets are hard. The point is the engineering, a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
+> **2026-07-31 — the AI quant desk was removed.** This project originally centred on an
+> autonomous LLM-agent quant team (signal desk + dip/rise desk, entry/exit agents, an ML
+> gate, a strategist, a nightly reviewer and a research loop). It was retired after
+> measuring −$66 lifetime P&L across 77 graded trades, with the agents' exits consistently
+> beaten by deterministic math. **The system now makes zero LLM calls.** The write-up of
+> what it was and why it went:
+> [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md) · [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md) ·
+> [QUANT_EXPLAINED.md](QUANT_EXPLAINED.md) (historical).
+>
+> **What runs today:** RIDP (rider/dipper/reverter + a shadow Guardian), RBT (daily-bar
+> pairs mean-reversion), Breadcrumbs (pooled LightGBM volatility scalper with a live A/B
+> cut experiment), SURGER (3 continuation detectors), plus log-only observers — a regime
+> detector, a movers recorder and a Telegram dip watcher.
+
+## Personal project: Markets are hard. The point is the engineering — a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
 ---
 
 ## Architecture at a glance

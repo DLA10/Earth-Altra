@@ -1,5 +1,14 @@
 # QUANT_VISION.md — The AI Agentic Quant Desk
 
+> ## ⚠ HISTORICAL DOCUMENT — the system described here was REMOVED on 2026-07-31
+>
+> The AI quant team (signal desk, dip+rise desk, LLM agents, ML gate, strategist,
+> reviewer, research loop, evals) no longer exists. This file is kept for reference only —
+> **it does not describe running code.** Code is recoverable from git at `1c1b710~1`.
+> See [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md), [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md)
+> and CLAUDE.md §13 for what replaced it.
+
+
 > Direction + architecture + phased roadmap for turning the current dip-bot into a real
 > multi-strategy, ML-assisted, agent-orchestrated intraday trading system. Paper-only for
 > the AI (real money stays 100% manual through the Execution page). This document is the

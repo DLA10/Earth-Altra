@@ -1,5 +1,14 @@
 # THROUGHPUT MODE — 2026-07-16
 
+> ## ⚠ HISTORICAL DOCUMENT — the system described here was REMOVED on 2026-07-31
+>
+> The AI quant team (signal desk, dip+rise desk, LLM agents, ML gate, strategist,
+> reviewer, research loop, evals) no longer exists. This file is kept for reference only —
+> **it does not describe running code.** Code is recoverable from git at `1c1b710~1`.
+> See [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md), [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md)
+> and CLAUDE.md §13 for what replaced it.
+
+
 **Why:** in the two weeks before this date the AI quant team, RIDER, DIPPER, and RBT
 placed **0–2 trades combined**. Every silent day was "nothing met criteria." On paper
 money the scarce resource is DATA, not dollars — a desk that never trades can never be

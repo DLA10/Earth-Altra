@@ -9,6 +9,16 @@ folder is still `Live-Optimus`.
 > The folder/app was renamed in the UI only — internal identifiers, package paths
 > (`live-optimus/backend`), and `package.json` name still say `live-optimus`.
 
+
+> ## ⚠ SUPERSEDED IN PART — read CLAUDE.md first
+>
+> On **2026-07-31** the AI quant team (signal desk, dip+rise desk, all LLM agents, ML gate,
+> strategist, reviewer, research loop, evals) and the **SNDK** desk were **removed**, and
+> `internal/quant` was stripped to the shared paper-broker client. Every section of this
+> file describing those systems is **historical**. `CLAUDE.md` is the maintained source of
+> truth — see its §13 for current desk operations, and DIP_RISE_ARCHIVE.md /
+> SNDK_RETIREMENT.md / AI_QUANT_LOG_DIGEST.md for the retired ones.
+
 ---
 
 ## 0. Who uses this & the safety bar (read first)

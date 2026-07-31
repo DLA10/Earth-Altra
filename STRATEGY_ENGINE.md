@@ -1,5 +1,14 @@
 # Trading Strategy Engine: Bollinger & RSI Hybrid
 
+> ## ⚠ HISTORICAL DOCUMENT — the system described here was REMOVED on 2026-07-31
+>
+> The AI quant team (signal desk, dip+rise desk, LLM agents, ML gate, strategist,
+> reviewer, research loop, evals) no longer exists. This file is kept for reference only —
+> **it does not describe running code.** Code is recoverable from git at `1c1b710~1`.
+> See [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md), [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md)
+> and CLAUDE.md §13 for what replaced it.
+
+
 This document contains the logic for the "Combo" strategy used in our simulations. You can integrate this into your Alpaca Live Execution engine.
 
 ## 1. Python Execution Logic (Alpaca Integration)

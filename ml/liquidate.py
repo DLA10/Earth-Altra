@@ -7,13 +7,19 @@ from alpaca.trading.client import TradingClient
 # every position on that desk's account IN ONE Alpaca call (close_all_positions) — the
 # instant, no-throttle alternative to the in-process reconciler's deliberate pacing.
 #
-#   python ml/liquidate.py RIDP     (also: RBT | CLAUDE | DIP | SNDK; default RBT)
+#   python ml/liquidate.py RIDP     (also: RBT | CLAUDE | DIP; default RBT)
+#
+# CLAUDE and DIP are the retired AI-quant desks' accounts (removed 2026-07-31). They are
+# kept here as wind-down tools: DIP is now SURGER's account (key names unchanged), and it
+# still held orphaned COHR/CRWV shares at retirement — leftovers from quant-Manager stops
+# that were sized to fewer shares than actually filled. Run `liquidate.py DIP` to clear
+# them; it cancels open orders and closes positions in one Alpaca call.
 #
 # PAPER ONLY by construction: reads PAPER_<DESK>_KEY/SECRET and connects with paper=True.
 # The live-money account's keys are never touched. Stop the backend first if you don't
 # want the desk to re-enter afterwards.
 
-DESKS = {"RBT", "RIDP", "CLAUDE", "DIP", "SNDK"}
+DESKS = {"RBT", "RIDP", "CLAUDE", "DIP"}
 
 
 def main():
