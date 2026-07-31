@@ -10,12 +10,13 @@ import { Ridp } from "./Ridp";
 import { Rbt } from "./Rbt";
 import { Movers } from "./Movers";
 import { Sndk } from "./Sndk";
+import { Surger } from "./Surger";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { OrderAlerts } from "./components/OrderAlerts";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { api } from "./api/client";
 
-type View = "execution" | "watchlist" | "decepticon" | "history" | "metrics" | "paper-claude" | "diprise" | "ridp" | "rbt" | "sndk" | "breadcrumbs" | "movers";
+type View = "execution" | "watchlist" | "decepticon" | "history" | "metrics" | "paper-claude" | "diprise" | "ridp" | "rbt" | "sndk" | "surger" | "breadcrumbs" | "movers";
 
 // Portal is the single app shell. It switches between the live execution engine and
 // the DECEPTICON scanner without leaving the app — same backend, same session, same
@@ -86,6 +87,9 @@ export default function Portal() {
           <button className={view === "sndk" ? "on" : ""} onClick={() => setView("sndk")}>
             <i className="ti ti-bolt" aria-hidden="true" /> Paper · SNDK
           </button>
+          <button className={view === "surger" ? "on" : ""} onClick={() => setView("surger")}>
+            <i className="ti ti-trending-up" aria-hidden="true" /> SURGER
+          </button>
           <button className={view === "breadcrumbs" ? "on" : ""} onClick={() => setView("breadcrumbs")}>
             <i className="ti ti-grain" aria-hidden="true" /> Breadcrumbs
           </button>
@@ -104,6 +108,7 @@ export default function Portal() {
         {view === "ridp" && <Ridp />}
         {view === "rbt" && <Rbt />}
         {view === "sndk" && <Sndk />}
+        {view === "surger" && <Surger />}
         {view === "breadcrumbs" && <Breadcrumbs />}
       </div>
       {/* Portal-wide order-fill animations — show on any tab when a live order fills/cancels. */}
