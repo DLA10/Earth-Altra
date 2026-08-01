@@ -1,263 +1,149 @@
-# Earth-Altra: Real-Time Trading Terminal & Deterministic Paper-Trading Desks
+# Earth-Altra — a trading terminal that runs its own experiments
 
-A trading platform with two halves. A user trades **real money** through a fast,
-safety-first terminal; alongside it run several **deterministic paper-trading desks** on
-separate simulated accounts — finding setups with plain-rule strategies and machine-learned
-gates, managing them with mechanical stops and exits, and holding every idea to a
-**pre-registered evaluation discipline whose only job is to kill what does not work before
-it can ever risk money.**
+A real-money US-equity trading terminal, and four automated strategies that trade
+**paper accounts** beside it. The terminal is for the human. The strategies are for
+finding out which ideas actually work, on live market data, without risking a cent.
 
-> **The one hard rule:** the user's money is real; **everything the desks do is on paper
-> accounts with their own separate keys.** There is no code path from any desk to the real
-> account. Nothing here is financial advice.
-
-> **2026-07-31 — the AI quant desk was removed.** This project originally centred on an
-> autonomous LLM-agent quant team (signal desk + dip/rise desk, entry/exit agents, an ML
-> gate, a strategist, a nightly reviewer and a research loop). It was retired after
-> measuring −$66 lifetime P&L across 77 graded trades, with the agents' exits consistently
-> beaten by deterministic math. **The system now makes zero LLM calls.** The write-up of
-> what it was and why it went:
-> [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md) · [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md) ·
-> [QUANT_EXPLAINED.md](QUANT_EXPLAINED.md) (historical).
->
-> **What runs today:** RIDP (rider/dipper/reverter + a shadow Guardian), RBT (daily-bar
-> pairs mean-reversion), Breadcrumbs (pooled LightGBM volatility scalper with a live A/B
-> cut experiment), SURGER (3 continuation detectors), plus log-only observers — a regime
-> detector, a movers recorder and a Telegram dip watcher.
-
-## Personal project: Markets are hard. The point is the engineering — a system built to find out the truth about its own ideas, and to keep real money and automated experiments strictly apart.
----
-
-## Architecture at a glance
-
-One market-data connection feeds three independent consumers. The centerpiece is the AI
-quant desk: a pipeline of increasingly selective filters, wrapped by a research plane that
-teaches it, an evaluation plane that governs it, and a journal that records everything.
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║               ONE REAL-TIME MARKET-DATA CONNECTION  (Go core)                ║
-║        live candle engine · in memory · sub-second · one feed, fanned out    ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-        │                          │                                │
-        ▼                          ▼                                ▼
-┌────────────────┐   ┌──────────────────────────────┐   ┌──────────────────────┐
-│ USER TERMINAL  │   │        AI QUANT DESK         │   │   MARKET SCANNER     │
-│  real money    │   │   agentic · fully autonomous │   │   ~470 stocks        │
-│  manual orders │   │        paper money           │   │   ranks live movers  │
-└────────────────┘   └───────────────┬──────────────┘   └──────────────────────┘
-                                     │
-   ┌─ THE AI DECISION PIPELINE ──────────────────  ◆ = a language-model agent ──┐
-   │  a gate can only REJECT or SHRINK a trade — none can create one             │
-   │                                                                             │
-   │  ◆ STRATEGIST · Opus — before the open, sets today's stance & budget       │
-   │        │                                                                    │
-   │        ▼                                                                    │
-   │    six strategies ............. find the setups           · plain rules     │
-   │        ▼                                                                    │
-   │    strategy scoreboard ........ bench proven losers       · evaluation      │
-   │        ▼                                                                    │
-   │    machine-learning gate ...... rate each setup's odds    · six models      │
-   │        ▼                                                                    │
-   │  ◆ SIGNAL JUDGE · Haiku ....... veto red flags, set size  · agent          │
-   │        ▼                                                                    │
-   │    budget allocator ........... cap at real cash, 3 max  · code             │
-   │        ▼                                                                    │
-   │  ◆ EXIT MANAGER · Haiku ....... trailing stop · take profit · cut early    │
-   │        │            ▲                                                       │
-   │        │      ◆ SENTIMENT · local model — advises                          │
-   │        ▼                                                                    │
-   │    PAPER broker  (simulated account)                                        │
-   │        │                                                                    │
-   │        ▼    after the close                                                 │
-   │  ◆ REVIEWER · Opus — writes the daily report card                          │
-   │  ◆ RESEARCH LOOP · Opus — proposes up to 3 changes, then STOPS for the use │
-   │                                                                             │
-   │  ( a seventh agent — ◆ DIP ENTRY · Haiku — feeds the same allocator from a │
-   │    separate messaging dip-alert stream )                                    │
-   └─────────────────────────────────────────────────────────────────────────────┘
-      ▲                          ▲                              │
-      │ taught by                │ governed by                  │ every action logged
-      │                          │                              ▼
-┌───────────────────┐   ┌──────────────────────┐   ┌─────────────────────────────┐
-│ RESEARCH & MACHINE│   │ EVALUATION FRAMEWORK │   │   DECISION JOURNAL          │
-│ LEARNING (Python) │   │ rolling scoreboard,  │   │   every signal + the        │
-│ nightly retrain · │   │ automatic demotion,  │   │   outcome it WOULD have had │
-│ walk-forward ·    │   │ change-point alarm,  │   │   (taken or not) →          │
-│ backtester        │   │ judge calibration    │   │   a self-labelling dataset  │
-└───────────────────┘   └──────────────────────┘   └─────────────────────────────┘
-
-  Seven agents (◆) orchestrate the desk: a STRATEGIST sets the daily stance, a
-  SIGNAL JUDGE and a DIP ENTRY agent decide entries, an EXIT MANAGER runs each
-  position, a SENTIMENT model advises, a REVIEWER grades the day, and a user-gated
-  RESEARCH LOOP proposes improvements. Rules and a machine-learning model feed them;
-  deterministic code holds the money.
-```
-
-**The core design rule — who decides what:** *plain rules find trades · a machine-learning
-model rates them · language-model agents judge and manage · deterministic code owns all the
-money.* The agents can only choose a direction, veto, or tighten protection; every limit
-(position size, budget, stop-losses, daily halts) is enforced in code they cannot override.
+> **The one hard rule:** the user's money is real; **every strategy runs on its own paper
+> account with its own keys.** No strategy has a code path to the real account, and nothing
+> auto-trades real money — every real order passes a confirm modal. Not financial advice.
 
 ---
 
-## The strategies (how setups are found)
-
-Six long-only intraday strategies run at the same time, on every stock, all day. Each is
-plain arithmetic — no artificial intelligence — so the exact same code runs in both the
-live desk and the backtester, which is why the backtest can be trusted.
-
-| Strategy | In one line |
-|---|---|
-| Opening-range breakout | Buys when a stock pushes above the high of its first fifteen minutes on strong volume. |
-| Average-price reclaim | Buys when a stock falls below its volume-weighted average price for the day and then fights back above it. |
-| Momentum continuation | Buys a stock already trending up that pauses briefly and then resumes. |
-| Dip bounce | Buys a sharp oversold drop **only after a confirmed green recovery candle** — never a falling knife. |
-| Relative strength | Buys a stock that is clearly outperforming the wider market. |
-| First-hour reversal | Buys a stock that was crushed early, stopped making new lows, and turned back up. |
-
-The universe is about ninety-six liquid, reputable technology names (semiconductors,
-memory, data-center, software, space, quantum) — no penny stocks.
-
-## The machine-learning gate (what makes it selective)
-
-The strategies alone win only about forty-six percent of the time — close to a coin flip.
-A machine-learning model turns that into an edge:
-
-- **One model per strategy** (six gradient-boosted decision-tree classifiers). Each learns,
-  from thousands of past setups, which conditions separate winners from losers, and outputs
-  an **expected reward** for the setup in front of it. Below a small pre-set bar, the trade
-  is rejected.
-- **The brain trains, the hands score.** A Python job **retrains every night** on all
-  history through that day — including the day's own fresh results — so the model walks
-  forward with reality. During the day the Go engine **scores each setup in a fraction of a
-  millisecond in-process** (no Python in the trading path).
-- **Provably identical math.** Each night's model ships with sample inputs and the trainer's
-  own answers; on load, the Go side must reproduce them to six decimal places **or the model
-  is refused.** Silent drift between training and live scoring is impossible.
-- **Fail-open everywhere.** A missing, stale, or unverified model means the desk simply
-  trades unfiltered — it degrades to the plain-strategy baseline, it can never freeze.
-
-## The agent team (judgment and language, never math)
-
-Six language-model agents supervise, size, manage, and explain — every one bounded by code.
-
-| Agent | Model | What it does |
-|---|---|---|
-| Strategist | Opus | Before the open, reads yesterday's results and the market trend and sets the day's stance (normal / cautious / stand-down) and budget. |
-| Signal judge | Haiku | A last red-flag veto on each setup (exhausted move, hostile market, thin liquidity) and a conviction score that sets position size. |
-| Dip entry agent | Haiku | Buy / do-not-buy decision for the older dip-alert pipeline. |
-| Exit manager | Haiku | Manages each open position — tightens the stop, takes profit near the plan's target, or cuts early if the thesis breaks. Now knows *why* the trade was opened, so it manages a quick mean-reversion trade differently from a momentum trade. |
-| Sentiment | local model | Advisory market-mood read that runs on the machine, at no cost. |
-| Reviewer | Opus | After the close, writes a plain-language daily report card the next morning's Strategist reads. |
-
-Agents are invoked with forced structured-output tool calls and cached instructions, so
-their output is always valid and cheap to run.
-
-## The evaluation framework (how bad ideas get killed)
-
-This is the part most trading projects skip, and the part that matters most here.
-
-- **Self-labelling journal.** *Every* signal is recorded with the outcome it *would* have
-  had — target or stop-loss hit first — even the ones never traded. Every few minutes, for
-  free, the system produces labelled training data.
-- **Rolling scoreboard + automatic benching.** Every ten minutes each strategy's last twenty
-  trading days are scored. Any strategy with proven negative expectancy, or a sudden
-  performance break caught by a cumulative-sum change detector, is **automatically stopped
-  from trading** — and automatically reinstated when it recovers. No user involved; it
-  benched two strategies on the very first live day.
-- **The agents are graded too.** Each veto by the judge is joined to what the trade actually
-  did, measuring whether its vetoes really dodge losers.
-- **A pre-registered promotion bar.** Before any experiment runs, the bar is fixed: an idea
-  must show **better trade selection AND better real dollars, on the full history AND on a
-  held-out recent slice**, or it does not ship. One change at a time; failures are recorded,
-  not buried.
-
-**What the framework actually did** (receipts, not a straight-up backtest):
-
-| Verdict | Idea | What happened |
-|---|---|---|
-| ✅ Shipped | Machine-learning gate | The only idea ever to clear the full bar — better selection **and** better dollars on every window: twelve months −$718 → **+$329**, recent quarter +$871 → **+$1,512**, with a smaller worst-case drawdown. |
-| 🔪 Demoted | Time-of-day filter | Looked great on six months and shipped — then a twelve-month re-test showed its edge depended on a single market regime and actually **hurt**, so it was benched to a silent observer. We kill our own darlings. |
-| 🔪 Killed | Curve-fit momentum tune | Best in-sample configuration (+$596) **died out-of-sample** (−$83). Caught by the walk-forward split. |
-| 🔪 Killed | Linear machine-learning gate | It **anti-selected** — the trades it rejected did better than the ones it kept. Caught by a selection metric, not by profit and loss. |
-| 🔪 Killed | Three-model agreement filter | Positive dollars but **negative selection** — the money came from trading less, not trading better. The framework saw through it. |
-
-## The guardrails (why it is safe)
-
-- **Budget capped at real cash.** The allocator syncs to the paper account's actual equity,
-  so it can never try to deploy money that is not there; a drawdown automatically shrinks
-  what it will risk.
-- **Hard limits in code:** a shared eight-thousand-dollar budget, at most three positions at
-  once, roughly one to two thousand dollars per trade sized by conviction, a one-hundred-and-
-  fifty-dollar daily loss cap that halts new entries, and a full flatten at 15:55 New York
-  time (at most one winner may be held overnight).
-- **Every position is protected within seconds** by a trailing stop-loss placed on the
-  exchange; the exit agent can only ever *tighten* that protection, never loosen it.
-- **Survives restarts.** On boot the desk re-adopts any open position, re-attaches its stop,
-  and resumes managing it.
-
-## The automation (a day runs itself)
+## How it fits together
 
 ```
-  before open   Strategist sets the day's stance and budget
-  9:30–15:30    strategies fire → scoreboard → gate → judge → allocator → trades
-  every 10 min  scoreboard re-scores and benches/reinstates strategies
-  13:30         research loop studies the day and messages a summary to the user
-  15:55         flatten (one overnight winner aside)
-  16:10         Reviewer writes the daily report card
-  ~17:05        nightly machine-learning retrain on data including today
+              ONE market-data connection (Alpaca SIP, sub-second)
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        ▼                         ▼                         ▼
+   YOUR TERMINAL             MOVERS + SCANNER          FOUR PAPER DESKS
+   real money                what's in play            each on its own account
+   confirm modal             ranked, scored,           ┌────────────────────┐
+   on every order            journaled all day         │ RBT       days     │
+                                                       │ REVERTER  minutes  │
+                                                       │ BREADCRUMBS ~5 min │
+                                                       │ SURGER    surges   │
+                                                       └────────────────────┘
+                                  │
+                     every decision journaled → replayed → judged
+                     against a pre-registered bar before anything changes
 ```
 
-The user's whole job is to keep it running and read the messages. A daily
-**research loop** (built on a state-machine agent framework) digests the day and proposes
-**at most three evidence-backed changes** — and it is **strictly user-gated**: it never
-applies anything itself; the user makes every change by hand.
-
-## The user's trading terminal (brief)
-
-The real-money side is a fast, safety-first manual terminal: sub-second live charts for any
-United States stock, the full range of order types (market, limit, stop-loss, trailing,
-one-cancels-the-other, and bracket), and order safety treated as a product feature —
-fat-finger blocks, a mandatory plain-language confirmation step, server-side re-checks,
-oversell protection, and a one-click cancel-everything switch. A separate market scanner
-ranks movers across roughly four hundred and seventy stocks. This side is deliberately kept
-simple and untouched by the artificial intelligence.
+Go backend (one SIP feed, in-memory candles, WebSocket fan-out) · React front end ·
+LightGBM where a model earns its place. That's the whole "how" — the rest of this page is
+what it *does*.
 
 ---
 
-## Technology
+## RBT — patient pairs trading
 
-| Layer | Choices |
-|---|---|
-| Backend | Go — one real-time market-data connection, an in-memory candle engine, and a web-socket fan-out to the browser |
-| Frontend | React with TypeScript and the TradingView charting library |
-| Machine learning | Python with the LightGBM library — walk-forward training and evaluation, plain-text datasets |
-| Agents | Anthropic's Claude models (Opus and Haiku) with forced structured output, plus a local model for sentiment |
-| Infrastructure | A single self-contained backend with state saved to disk — no external database or queue |
+**The idea:** two stocks that normally move together drift apart; bet they snap back.
+
+- **Scans once a day**, in the last ten minutes before the close. No intraday babysitting.
+- **199 liquid names**, screened for genuine statistical relationships — not a hunch list.
+- Enters only when a pair is stretched **2σ or more**; a LightGBM model ranks the
+  candidates so only the **top 5** get capital.
+- **Trades both directions** — long when a name is unusually cheap, short when it's
+  unusually rich.
+- **Five slots, equal weight** (~$20k each), so no single idea can dominate the book.
+
+**Why you'd want it:** it's the calm one. Positions are *meant* to sit for days, so a red
+afternoon means nothing. Each one has four independent ways out — the target, a
+daily-close stop, an emergency stop resting at the exchange, and a hard five-session
+deadline — so nothing drifts forever. A recent example: **GOOGL, held two sessions, +$709.**
+
+## REVERTER — the twitch trader
+
+**The idea:** within a single minute, price overshoots its own short-term average. Buy the
+overshoot, sell the snap-back.
+
+- Fires when a stock drops **1.5σ below its 15-minute mean**, exits when it returns.
+- Holds for **minutes** — often under five. Hundreds of small round trips a day.
+- A hard floor at 4σ and a **15:55 flatten**: it never carries risk overnight.
+
+**Why you'd want it:** it's the fastest measuring instrument in the system. Because it
+trades so much, it answers questions in *days* instead of months — and it has already
+answered one. Its edge is real in the **first 30 minutes** of the session and negative
+after 10:00, a pattern that has now repeated for eight straight sessions. That finding is
+worth more than the P&L.
+
+## BREADCRUMBS — the machine-learned scalper
+
+**The idea:** in volatile names, a short-lived move is often predictable enough to take a
+small, quick bite.
+
+- **22 deliberately volatile stocks**, scored bar by bar by a **pooled LightGBM model** on
+  nine scale-free features.
+- A trade needs **three independent yeses**: model confidence ≥0.65, price above its
+  100-bar trend, and not already stretched past 2σ from VWAP.
+- Pre-committed exits: **+0.57% target, −0.71% stop**, then a 0.2% trailing stop that locks
+  the target in once it's reached.
+- **Retrains itself weekly** on its own fresh outcomes — no manual model babysitting.
+
+**Why you'd want it:** it's the most self-aware desk here. It benches any symbol that stops
+it out twice in one day, waits five minutes before re-entering anything, and books every
+exit from the broker's actual fill price rather than what it hoped to get. It's also
+running a **live A/B experiment on itself**: every position cut by the $25 rule spawns a
+shadow twin that keeps trading uncut, so "does this rule help?" gets settled by evidence
+on a fixed date instead of by opinion.
+
+## MOVERS — what's actually in play, all day
+
+**The idea:** before any strategy fires, you want to know where the action is.
+
+- Whole-market **gainers and losers**, refreshed continuously.
+- A **Risers** table scoring each name on how far it's come off the open, relative volume,
+  distance from VWAP and momentum — one number for "is this real?"
+- **Catalyst radar** across 39 sectors and ~683 tickers, so a move arrives with a reason.
+- Click any tile for a **live chart** — even of a symbol nobody was tracking a second ago;
+  the backend starts streaming it on demand.
+- A **shadow recorder** journals the whole table every 15 minutes from 09:45 to 16:00 and
+  keeps following every name that lit up.
+
+**Why you'd want it:** it's the situational-awareness layer — and the honest one. It writes
+down what it flagged, then tracks what actually happened next, so "the movers page is
+useful" can be checked against a record instead of memory.
+
+---
+
+## What ties them together
+
+**Nothing ships on a good story.** Every idea is replayed on historical data against a
+pre-registered bar before going live, and every live desk journals enough to replay its own
+decisions later. Two things that discipline has already caught:
+
+- A knife-detection program — 14 detectors and a model with a genuine 0.81 AUC — produced
+  **no dollar edge at all** once measured against a fair control. Cancelled, not shipped.
+- The AI agent team this project was originally built around: **retired** after 77 graded
+  trades came in at −$66, with plain deterministic math beating the model's exits.
+
+**Safety is structural, not a promise.** Separate accounts and separate keys. Orders settled
+to a terminal state before anything is booked. Cancels confirmed before a replacement is
+placed. Positions reconciled against the broker on every restart. And the terminal blocks
+the fat-finger mistakes a novice actually makes — like a buy limit set *above* the market,
+which fills instantly.
 
 ## Run it
 
-Everything starts with one click:
-
+```bash
+scripts/check-keys.ps1      # verify Alpaca keys + SIP entitlement
+scripts/run-backend.ps1     # Go backend → :8080
+scripts/run-frontend.ps1    # Vite dev    → :5173
 ```
-START-Live-Optimus.bat
-```
 
-(It launches the backend and the browser interface together. Keys live only in a
-server-side environment file and are never committed.)
+Or `START-Live-Optimus.bat` to launch both. Keys live only in a server-side environment
+file and are never committed.
 
-## Deeper documentation
+## Going deeper
 
-- **[QUANT_EXPLAINED.md](QUANT_EXPLAINED.md)** — the whole system in plain words, A to Z,
-  with a one-page workflow diagram.
-- **[QUANT_VISION.md](QUANT_VISION.md)** — the architecture, the phase gates, and the running
-  log of what the evaluation framework promoted or killed, with numbers.
-- **[RESEARCH_BACKLOG.md](RESEARCH_BACKLOG.md)** — the prioritized idea queue and every
-  settled verdict.
+`CLAUDE.md` is the maintained technical reference — architecture, every desk's dials, and
+the operations playbook. Study write-ups: `SURGER_V2.md`, `HARVEST_STUDY.md`,
+`KNIFE_STUDY.md`, `REGIME_DETECTOR_STUDY.md`, `REVERTER_FILTERS.md`. Retired systems:
+`DIP_RISE_ARCHIVE.md`, `SNDK_RETIREMENT.md`, `AI_QUANT_LOG_DIGEST.md`.
 
 ---
 
-*Personal project. Markets are hard; the point is the engineering — a system built to find
-out the truth about its own ideas, and to keep real money and automated experiments strictly
-apart.*
+*Personal project. Markets are hard — the point is the engineering: a system built to find
+out the truth about its own ideas, and to keep real money and automated experiments
+strictly apart.*
