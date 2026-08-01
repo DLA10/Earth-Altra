@@ -1,10 +1,10 @@
-# The Dip+Rise desk — archive (2026-06-29 → 2026-07-31)
+# The Dip+Rise desk: archive (2026-06-29 → 2026-07-31)
 
 **Status: REMOVED 2026-07-31.** This document exists because the desk was never written
-up anywhere else — `QUANT_EXPLAINED.md` covers the *signal* desk in depth and mentions
+up anywhere else, `QUANT_EXPLAINED.md` covers the *signal* desk in depth and mentions
 dip/rise only in passing. Code is recoverable from git history at `1c1b710~1`
 (`backend/internal/quant/{engine,agent2,risewatch,manager,allocator}.go`); raw journals
-are archived under `backend/data/_archive/` (gitignored — real fill data).
+are archived under `backend/data/_archive/` (gitignored, real fill data).
 
 ---
 
@@ -40,16 +40,16 @@ dip watcher (Go, deterministic)            ── the detector, still alive toda
 
 | Component | File (pre-removal) | What it did |
 |---|---|---|
-| Dip watcher | `internal/dipwatch/dipwatch.go` | **STILL LIVE.** Detects the dip, sends Telegram. Its `SetHook` callback — the only line that fed the AI — was deleted; alerts fire *before* the hook, so nothing about detection or messaging changed. |
+| Dip watcher | `internal/dipwatch/dipwatch.go` | **STILL LIVE.** Detects the dip, sends Telegram. Its `SetHook` callback, the only line that fed the AI, was deleted; alerts fire *before* the hook, so nothing about detection or messaging changed. |
 | Agent 2 (entry) | `quant/agent2.go` | One Claude call per confirmed dip: buy or no_buy, with conviction. Model went Sonnet → Haiku on 2026-07-31 for cost. The last LLM left in the whole system when it was removed. |
-| Rise watcher | `quant/risewatch.go` | Deterministic. Armed every dip Agent 2 declined and entered only on a confirmed reclaim. Gated by `QUANT_RISE_LIVE` (default false — it spent most of its life in shadow, journaling would-be entries). |
+| Rise watcher | `quant/risewatch.go` | Deterministic. Armed every dip Agent 2 declined and entered only on a confirmed reclaim. Gated by `QUANT_RISE_LIVE` (default false, it spent most of its life in shadow, journaling would-be entries). |
 | Allocator | `quant/allocator.go` | Budget = `min(configured, live account equity)`, re-synced every 60s. Per-position slice, concurrency cap. Pure code. |
 | Manager | `quant/manager.go` | Shared with the signal desk. Entry, trailing-stop floor, breakeven ratchet (rail D), grace checkpoints (rail E), **rail F** (the deterministic stack that replaced Agent 3 on 2026-07-25), 15:55 flatten, `Rehydrate` on restart. |
 | Agent 3 (exit) | `quant/agent3.go` | Removed from the trade path 2026-07-25, deleted 2026-07-31. |
 
 ## 3. What the journals say (lifetime, 24 trading days)
 
-From `data/decisions/*.jsonl` — 5,277 decisions, 3,783 journaled skips, 77 graded outcomes:
+From `data/decisions/*.jsonl`, 5,277 decisions, 3,783 journaled skips, 77 graded outcomes:
 
 | Source | Trades | P&L |
 |---|---:|---:|
@@ -67,10 +67,10 @@ wrote **16 daily report cards**.
 ## 4. Why it was retired
 
 1. **It never made money.** −$66 lifetime across every source; the biggest single bucket
-   of loss was *rehydrated* positions — i.e. the plumbing around restarts, not the thesis.
+   of loss was *rehydrated* positions, i.e. the plumbing around restarts, not the thesis.
 2. **Agent 2's edge was unproven at best.** A pre-registered exam on 2026-07-25 (329
    graded alerts, rail-F simulation, FIT/TEST split) found: take-all −$97 on TEST, the
-   best knife-style gate −$14, Agent 2's own picks **+$14** — on only 5 graded picks. It
+   best knife-style gate −$14, Agent 2's own picks **+$14**, on only 5 graded picks. It
    kept its seat on that thin evidence, then the desk was retired six days later.
 3. **The exits that worked were the deterministic ones.** The operator's observation, and
    the reason Agent 3 was replaced by rail-F math rather than tuned.
@@ -79,19 +79,19 @@ wrote **16 daily report cards**.
 
 ## 5. What survived it
 
-- **The dip watcher and its Telegram alerts** — unchanged, hook removed.
-- **Rail-F exit math** — the ideas (not-green-by-30m, stale-90m, two-stage tighten,
+- **The dip watcher and its Telegram alerts**: unchanged, hook removed.
+- **Rail-F exit math**: the ideas (not-green-by-30m, stale-90m, two-stage tighten,
   $-lock) proved out here and are documented in `CLAUDE.md`; the RIDP and Breadcrumbs
   desks use the same *patterns*.
 - **The order-lifecycle discipline** it taught the hard way: settle to a TERMINAL state,
   confirm cancels before replacing, never book a fictional exit, reconcile account vs
   book. Every surviving desk inherits those rules.
 - **Its paper account.** SURGER now runs alone on `PAPER_DIP_*` (key names kept
-  deliberately — no migration risk to a live book).
+  deliberately, no migration risk to a live book).
 
 ## 6. If you ever want it back
 
 `git show 1c1b710~1:backend/internal/quant/engine.go` (and siblings). You would need:
 the `quant` package's agent files, `internal/evals`, the `ANTHROPIC_API_KEY` config
 plumbing, the `/api/diprise` handler, and `DipRise.tsx`. Before doing any of that, read
-§4 — and re-run the Agent 2 exam with a bigger journal first.
+§4, and re-run the Agent 2 exam with a bigger journal first.

@@ -1,4 +1,4 @@
-# AI quant desk — log digest (committed summary of the archived journals)
+# AI quant desk: log digest (committed summary of the archived journals)
 
 The raw journals are **not** in git: `backend/data/` is gitignored because it holds real
 fill data. They live on the operator's machine at `backend/data/_archive/` (~59 MB,
@@ -20,7 +20,7 @@ contained, so the numbers survive even if the machine doesn't.
 | `sndk/` | 4 | 63 KB | SNDK desk state + last signal |
 | `ml_dataset*.jsonl`, `ml_predictions*.jsonl`, `daily_universe.json` | 10 | ~21 MB | ML training sets, gate predictions, last live universe |
 
-`btcache/` (1.9 GB of cached historical bars) was **deleted, not archived** — it is a
+`btcache/` (1.9 GB of cached historical bars) was **deleted, not archived**, it is a
 rebuildable cache.
 
 ## Lifetime activity (from `decisions/`, 24 trading days)
@@ -56,7 +56,7 @@ SNDK, separately: **54 trades, −$146.70, 44% WR** (07-16 → 07-31); exits 22 
 
 ## Loose ends found at retirement
 
-**Orphaned unprotected shares on the DIP account** — discovered 2026-07-31 while verifying
+**Orphaned unprotected shares on the DIP account**, discovered 2026-07-31 while verifying
 the account was clean:
 
 | Symbol | Bought | Stop covered | Orphaned | Since |
@@ -65,7 +65,7 @@ the account was clean:
 | CRWV | 9 (07-28) | 2 | **7 shares** | 2026-07-28 |
 
 Cause: the quant Manager placed protective stops sized to **fewer shares than actually
-filled**; when the stop filled, the remainder was left with no protection and no owner —
+filled**; when the stop filled, the remainder was left with no protection and no owner,
 the same "stop sized to requested-not-filled qty" class as the RIDP 268-UNPROTECTED
 incident. Both sat unprotected for 2–3 days. ≈ $770 of exposure.
 

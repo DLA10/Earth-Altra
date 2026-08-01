@@ -130,9 +130,9 @@ EVENT_DRIVEN_WATCHLIST.md   DECEPTICON universe (39 depts, ~683 tickers incl. fu
 QUANT_UNIVERSE.json         signal-engine universe (534 names since the 2026-07-16
                             throughput expansion; curated ~160 liquid set preserved in
                             QUANT_UNIVERSE.baseline-2026-07-16.json)
-Instruction.md              pre-market universe-selection playbook
-QUANT_VISION.md             design + roadmap for the AI agentic quant system
-THROUGHPUT_MODE.md          all loosened dials 2026-07-16 + rollback env overrides
+Instruction.md              pre-market universe-selection playbook      [local only]
+QUANT_VISION.md             design + roadmap for the removed AI quant system [local only]
+THROUGHPUT_MODE.md          all loosened dials 2026-07-16 + rollback overrides [local only]
 scripts/                    PowerShell launchers · START-Live-Optimus.bat  one-click launcher
 ```
 
@@ -395,7 +395,10 @@ SNDK desk. The system now makes **zero LLM calls**. History and rationale:
 [DIP_RISE_ARCHIVE.md](DIP_RISE_ARCHIVE.md) · [SNDK_RETIREMENT.md](SNDK_RETIREMENT.md) ·
 [AI_QUANT_LOG_DIGEST.md](AI_QUANT_LOG_DIGEST.md). Code is recoverable from git at
 `1c1b710~1`. `QUANT_EXPLAINED.md`, `QUANT_VISION.md` and `STRATEGY_ENGINE.md` describe the
-removed system and are kept as historical documents only.
+removed system and are kept as historical documents only. NOTE: since 2026-08-01 those
+three, plus `AGENTS.md`, `Instruction.md`, `RESEARCH_BACKLOG.md` and `THROUGHPUT_MODE.md`,
+are **local-only** (gitignored, still on the operator's disk). A fresh clone will not have
+them, so do not link to them from repo-facing docs.
 
 Two names survive the removal and are **load-bearing — do not "clean them up"**:
 - **`internal/quant`** now contains ONLY `broker.go`, the shared Alpaca paper-broker

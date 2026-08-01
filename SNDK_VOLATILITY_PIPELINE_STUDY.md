@@ -1,12 +1,12 @@
-# SNDK scalping pipeline — volatility-generalization study (2026-07-18)
+# SNDK scalping pipeline: volatility-generalization study (2026-07-18)
 
 **Status:** research finding, NOT implemented. Paper-only. Documents whether the SNDK
 1-minute ML scalping pipeline is a general edge, and under what conditions it works.
 
 **Question:** SNDK exploded in Jan–Feb, so its backtest looked great. Is the pipeline a
-real, generalizable edge — or is it optimized for / dependent on SNDK's extreme volatility?
+real, generalizable edge, or is it optimized for / dependent on SNDK's extreme volatility?
 
-**One-line answer:** it is a **volatility harvester** — a genuine, out-of-sample,
+**One-line answer:** it is a **volatility harvester**, a genuine, out-of-sample,
 cost-surviving edge on *high-volatility* liquid stocks (22/22 profitable), and roughly
 break-even on stable stocks. The edge is NOT stock-specific: a single **pooled** model
 generalizes across the whole volatile basket (slightly better than per-stock models).
@@ -15,17 +15,17 @@ generalizes across the whole volatile basket (slightly better than per-stock mod
 
 ## 1. The pipeline (exactly, from the SNDK code)
 
-**Features (9), per 1-minute bar** — all scale-free/relative:
+**Features (9), per 1-minute bar**, all scale-free/relative:
 `Z_Score` (Close vs EMA10 / rolling std10), `RSI_5`, `RSI_14`, `ROC_3`, `ROC_10`,
 `ATR_Ratio` (ATR5/ATR20), `MACD_Hist`, `Z_BB` (Close vs Bollinger20 mean/std),
 `Vol_Ratio` (VolMA5/VolMA20). (Source: `ml/sndk_live_signals.py` / `train_sndk_production_model.py`.)
 
-**Label (ML target) — triple-barrier:** for each bar, label = 1 if, within the next
+**Label (ML target), triple-barrier:** for each bar, label = 1 if, within the next
 **5 minutes (same trading day)**, price reaches **+target before −target**; else 0.
 Original SNDK used ±$8 (fixed dollars). **This study uses percentage barriers** so it is
 comparable across stocks (see §2).
 
-**Model:** LightGBM classifier — `n_estimators=50, max_depth=3, learning_rate=0.05,
+**Model:** LightGBM classifier, `n_estimators=50, max_depth=3, learning_rate=0.05,
 class_weight="balanced", random_state=42`. Predicts P(hits +target before −target in 5 min).
 
 **Entry (all three must hold):** `prob ≥ 0.65` AND `Close > EMA_100` (trend filter) AND
@@ -36,10 +36,10 @@ The seven exit variants tested are in §3. EOD flat at 15:59 ET; RTH only (09:30
 
 ---
 
-## 2. The critical design decision — percentage barriers
+## 2. The critical design decision: percentage barriers
 
 The original ±$8 target/stop is calibrated for a ~$1,400 stock (0.57%). On a $60 stock,
-$8 = 13% — nonsensical. To test "the same pipeline" across stocks of any price, **both the
+$8 = 13%, nonsensical. To test "the same pipeline" across stocks of any price, **both the
 training labels and the exits are expressed as percentages**, SNDK-equivalent:
 `TP = 0.57%`, `SL = 0.71%`, trail widths in %. This is mandatory for a fair cross-stock
 test and is consistent with the separate finding that percentage settings generalize while
@@ -60,7 +60,7 @@ trail width and whether a **profit-lock** floors the stop at +target once reache
 | D | 0.3% | yes |
 | E | 0.2% | no |
 | **F** | **0.2%** | **yes ← WINNER** |
-| (also fixed-$ trails — REJECTED: overfit to price level, don't generalize) |
+| (also fixed-$ trails, REJECTED: overfit to price level, don't generalize) |
 
 **Consistent ranking across every basket tested (4 independent times):**
 `0.2%+lock  >  0.2% no-lock  >  0.3%+lock  >  0.5%+lock  >  0.5% no-lock (worst)`.
@@ -85,7 +85,7 @@ For **each stock independently**:
 **No lookahead leakage:** features only look backward; labels look forward ≤5 min but are
 **capped at the same trading day**, so a training-month label can't peek into the test month.
 
-**Cost model:** per trade, cost = `(bps/10000) × (entry_price + exit_price) × qty` — i.e.
+**Cost model:** per trade, cost = `(bps/10000) × (entry_price + exit_price) × qty`, i.e.
 `bps` charged on BOTH the entry and exit notional. So **"@2bp" = 2bp per side ≈ 4bp
 round-trip.** Fixed **$1,500 notional per trade** (qty = 1500/price) so P&L is comparable
 across stocks. Frictionless fills assumed (see caveats).
@@ -106,7 +106,7 @@ month.
 | SNDK alone (walk-forward) | +$1,225 | +$840 | 5/6 folds |
 | 12 stable (KO PG JNJ WMT MCD CSCO VZ MRK HON CAT JPM TXN) | +$992 | +$131 | 4/12 |
 
-- **22 of 22 volatile stocks profitable** out-of-sample after cost — the strongest,
+- **22 of 22 volatile stocks profitable** out-of-sample after cost, the strongest,
   broadest result of the whole investigation.
 - Volatile basket is **~32×** the stable basket at 2bp, and 22/22 vs 4/12 positive.
 - **Volatility → profit correlation** visible: highest-vol names lead (ASTS 8.6% → +$984,
@@ -134,7 +134,7 @@ Cost is linear in bps. Approx break-even (per-side bps, where net → 0):
 - Combined volatile basket: ~5–6.5bp **per side** (≈10–13bp round-trip).
 - Stable basket: ~1bp per side (essentially unusable).
 Higher-volatility baskets tolerate more slippage because each trade's edge is larger
-relative to the spread. Real fills must beat this — see caveats.
+relative to the spread. Real fills must beat this, see caveats.
 
 ## 8. Caveats (do not ignore)
 
@@ -144,7 +144,7 @@ relative to the spread. Real fills must beat this — see caveats.
 2. **Regime.** The 6-month window (Jan–Jul 2026) was a HOT tape for semis/momentum/quantum/
    crypto. The edge lives on volatility being present; a sustained sell-off in these names
    would shrink it.
-3. **Live measurement is the only remaining unknown** — real limit/market fill quality vs
+3. **Live measurement is the only remaining unknown**, real limit/market fill quality vs
    the ~5–6bp/side break-even. No backtest can answer it.
 
 ## 9. Recommendation
@@ -155,7 +155,7 @@ Generalize the SNDK pipeline to a **curated basket of high-volatility liquid nam
 - Exit: **0.2% trailing stop with the +target profit-lock** (config F), hard stop at −0.71%,
   EOD flat.
 - **Paper-trade it** to measure real fills against the ~5–6bp/side break-even. If fills
-  cooperate, this is the first broadly-validated earner of the investigation.
+  cooperate. This is the first broadly-validated earner of the investigation.
 Never run it on quiet blue-chips (marginal), and never use fixed-dollar exits (price-overfit).
 
 ## 10. Reproducibility (session scratchpad scripts)

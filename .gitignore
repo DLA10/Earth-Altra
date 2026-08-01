@@ -41,3 +41,16 @@ ml/*.bin
 # Build artifacts
 *.tsbuildinfo
 ml/__pycache__/
+
+# Local-only notes (2026-08-01). These stay on the machine but out of the repo:
+# personal playbooks, the internal idea queue, a duplicate of CLAUDE.md, and the
+# design docs for the AI quant system that was removed 2026-07-31. The retirement
+# write-ups that DO belong in the repo are DIP_RISE_ARCHIVE.md, SNDK_RETIREMENT.md
+# and AI_QUANT_LOG_DIGEST.md.
+AGENTS.md
+Instruction.md
+RESEARCH_BACKLOG.md
+QUANT_EXPLAINED.md
+QUANT_VISION.md
+STRATEGY_ENGINE.md
+THROUGHPUT_MODE.md

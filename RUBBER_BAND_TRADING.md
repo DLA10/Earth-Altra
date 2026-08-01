@@ -1,4 +1,4 @@
-# Rubber Band Trading (RBT) — Mean Reversion Quant Desk
+# Rubber Band Trading (RBT): Mean Reversion Quant Desk
 
 This document explains the technical architecture, mathematical concepts, and sector performance results of the **Rubber Band Trading (RBT)** quantitative trading pipeline integrated into Earth-Altra.
 
