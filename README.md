@@ -1,8 +1,12 @@
-# Earth-Altra — a trading terminal that runs its own experiments
+# Earth-Altra — a quantitative trading platform for mean reversion
 
-A real-money US-equity trading terminal, and several automated strategies that trade
-**paper accounts** beside it. The terminal is for the human. The strategies are for
-finding out which ideas actually work, on live market data, without risking a cent.
+**Machine-learning pipelines that score the setups, deterministic rules that trade them,
+and a real-money terminal to work from.** Where a model earns its place the shape is
+always the same — engineered features → labelled outcomes → a LightGBM model → a
+probability → hard gates that must all agree. Where plain statistics do the job better,
+they do it instead. Either way the strategy trades a paper account until the evidence
+earns it more: the terminal is for the human, the strategies are for finding out which
+ideas actually survive a live market.
 
 > **The one hard rule:** the user's money is real; **every strategy runs on its own paper
 > account with its own keys.** No strategy has a code path to the real account, and nothing
@@ -132,8 +136,11 @@ this page is what it *does*.
 
 ## The paper desks
 
-Four strategies trade paper accounts alongside the terminal. Each is an experiment with a
-pre-registered success bar.
+Four strategies trade paper accounts alongside the terminal, each an experiment with a
+pre-registered success bar. Three of them bet on prices coming *back* — that's the house
+thesis. The fourth, SURGER, deliberately bets the opposite way, on moves carrying on: a
+platform that only ever tests its favourite idea learns nothing about when that idea is
+wrong.
 
 ### RBT — Rubber-Band Trading
 
