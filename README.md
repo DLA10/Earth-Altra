@@ -1,12 +1,7 @@
-# Earth-Altra — a quantitative trading platform for mean reversion
+# Earth-Altra — a quantitative trading platform for mean reversion with ML pipelines
 
-**Machine-learning pipelines that score the setups, deterministic rules that trade them,
-and a real-money terminal to work from.** Where a model earns its place the shape is
-always the same — engineered features → labelled outcomes → a LightGBM model → a
-probability → hard gates that must all agree. Where plain statistics do the job better,
-they do it instead. Either way the strategy trades a paper account until the evidence
-earns it more: the terminal is for the human, the strategies are for finding out which
-ideas actually survive a live market.
+A real-money US-equity terminal, statistical mean reversion, LightGBM gates, and a rule
+that nothing ships until the evidence says so.
 
 > **The one hard rule:** the user's money is real; **every strategy runs on its own paper
 > account with its own keys.** No strategy has a code path to the real account, and nothing
