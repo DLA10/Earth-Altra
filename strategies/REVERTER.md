@@ -1,4 +1,4 @@
-# REVERTER — the twitch trader
+# REVERTER: the twitch trader
 
 **In one line:** when a price overshoots its own short-term average, buy the overshoot and
 sell the snap-back.
@@ -9,7 +9,7 @@ Paper account · holds for minutes · hundreds of trades a day · flat every nig
 
 ## The idea
 
-Over a few minutes, a stock has a "normal" level — roughly its average over the last
+Over a few minutes, a stock has a "normal" level: roughly its average over the last
 quarter hour. Real news moves that level. Everything else is noise: a burst of selling
 pushes price below where it belongs, and it drifts back.
 
@@ -44,9 +44,9 @@ Three exits, no discretion. Most trades end in under five minutes.
 | | |
 |---|---|
 | **Entry** | price 1.5σ below its own 15-minute average |
-| **Exit — target** | price returns to that average |
-| **Exit — floor** | 4σ below. If it's fallen this far, the assumption was wrong |
-| **Exit — clock** | flat at 15:55, always |
+| **Exit, target** | price returns to that average |
+| **Exit, floor** | 4σ below. If it's fallen this far, the assumption was wrong |
+| **Exit, clock** | flat at 15:55, always |
 | **Hold time** | minutes, usually under five |
 | **Volume** | hundreds of round trips a day |
 
@@ -73,16 +73,16 @@ never looked at this desk's records.
 
 **But the clock isn't the whole story.** On one recent morning REVERTER was up +$43 inside
 its supposedly-good window, then lost it all in twelve minutes as seventeen positions
-stopped out one after another — a cascade, inside the "safe" hour. A time-of-day rule
+stopped out one after another in a cascade, inside the "safe" hour. A time-of-day rule
 alone wouldn't have saved that day. Whatever gets built has to handle both: the calendar
 *and* the tape.
 
 ## Honest status
 
 Running **unchanged, on purpose**, collecting a second clean week of data. Several
-improvements are designed and backtested — a trading curfew, a blackout over the toxic
-hour, entry filters that skip the sharpest falls, a rule that halts everything when
-several positions stop out together — and **none of them are switched on**.
+improvements are designed and backtested: a trading curfew, a blackout over the toxic
+hour, entry filters that skip the sharpest falls, and a rule that halts everything when
+several positions stop out together. **None of them are switched on.**
 
 That's deliberate. The first week's numbers were polluted by plumbing bugs (protective
 orders that failed to place, exits that bounced off stale orders). Those are fixed now, so
@@ -96,13 +96,13 @@ established intraday trends) and DIPPER (buys multi-day dips and holds for days)
 share an account and a journal, but make entirely independent decisions.
 
 A log-only overseer called **Guardian** watches the whole desk and records what *would*
-have happened under a dozen different risk rules — desk-wide stops, profit locks, cascade
-halts — without ever placing an order. Those counterfactuals are what the improvement
+have happened under a dozen different risk rules (desk-wide stops, profit locks, cascade
+halts) without ever placing an order. Those counterfactuals are what the improvement
 decisions get made from.
 
 ## Deeper
 
-[`REVERTER_FILTERS.md`](../REVERTER_FILTERS.md) — the three designed entry filters, with
-the evidence behind them ·
-[`RIDP_REVERTER_FIXES.md`](../RIDP_REVERTER_FIXES.md) — the operational fixes and the
+[`REVERTER_FILTERS.md`](../REVERTER_FILTERS.md) sets out the three designed entry filters
+with the evidence behind them.
+[`RIDP_REVERTER_FIXES.md`](../RIDP_REVERTER_FIXES.md) covers the operational fixes and the
 decision docket.

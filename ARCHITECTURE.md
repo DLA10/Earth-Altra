@@ -15,7 +15,7 @@ completely separate, slower, more careful path.
 
 ## Why two languages
 
-**Go handles anything that must be fast.** Market data arrives continuously — thousands of
+**Go handles anything that must be fast.** Market data arrives continuously, thousands of
 trades a second across hundreds of symbols. Go handles that kind of load without the pauses
 that would show up as a chart stuttering, and it's happy running dozens of things at once
 (each strategy, the price engine, the scanner) without them tripping over each other.
@@ -44,7 +44,7 @@ gap once, for everybody.
 
 **Subscribe to anything, any time.** You can open a chart for a symbol nobody was watching.
 The browser asks for it, the server notices it isn't tracked, fetches today's history,
-subscribes to it on the live feed, and starts streaming — usually before the chart finishes
+subscribes to it on the live feed, and starts streaming, usually before the chart finishes
 drawing. Symbols are only ever *added* this way, never removed mid-session, because
 removing one could disturb something that's mid-trade.
 
@@ -53,7 +53,7 @@ removing one could disturb something that's mid-trade.
 | Piece | What it does |
 |---|---|
 | **Price engine** | Keeps 1-, 5- and 10-minute candles in memory for every tracked symbol. Folds each trade into the candle still forming, and throws out obviously bad prices (a zero, or a wild spike that no real trade would make). |
-| **Hub** | The broadcaster. Each browser tab says which symbol and timeframe it wants; the hub sends only that. Updates are throttled to a few per second — fast enough to look live, slow enough not to flood the browser. |
+| **Hub** | The broadcaster. Each browser tab says which symbol and timeframe it wants; the hub sends only that. Updates are throttled to a few per second, fast enough to look live, slow enough not to flood the browser. |
 | **Scanner** | Per-stock statistics the whole app leans on: relative volume, VWAP, how far it's moved from the open, the day's range, the spread. This is what the Movers scores and the DECEPTICON page are built from. |
 | **Pressure tracker** | Estimates how much volume was buyer-driven versus seller-driven, by comparing each trade to the quote at that moment. |
 | **REST API** | Everything that isn't a live price: placing orders, account and positions, historical bars, your fill history, news, the desk reports. |
@@ -69,13 +69,13 @@ This is the most important design decision in the whole system.
 ```
 
 Prices stream over a WebSocket because they must be instant and nothing bad happens if one
-is missed — another arrives in a moment. **Orders never travel that way.** They go over
+is missed, another arrives in a moment. **Orders never travel that way.** They go over
 ordinary web requests, one at a time, each with an explicit reply. A dropped connection can
 never half-place an order, and no amount of price traffic can delay one.
 
 ## How an order actually travels
 
-1. **You fill in the panel.** It checks the obvious things immediately — enough shares to
+1. **You fill in the panel.** It checks the obvious things immediately, enough shares to
    sell, a stop on the correct side of the price, size within your cap.
 2. **The confirm modal appears.** Always. It restates what will happen in plain language,
    and warns loudly if the price you picked will fill instantly rather than wait.
@@ -89,7 +89,7 @@ without a human pressing a button.**
 
 ## How the strategies stay isolated
 
-Each desk runs on **its own paper account with its own keys**. Not a sub-account — a
+Each desk runs on **its own paper account with its own keys**. Not a sub-account, a
 genuinely separate one. If a strategy has a bug and sells everything it can see, the only
 thing it can see is its own money.
 
@@ -97,7 +97,7 @@ Within an account, every order carries a **tag** identifying which strategy plac
 books can never be confused even where something is shared. And a desk with no keys
 configured simply doesn't start.
 
-They also all follow the same hard-won rules about orders — learned from real incidents:
+They also all follow the same hard-won rules about orders, learned from real incidents:
 
 - **Wait for the final answer.** An order that's half-filled isn't finished. Book only what
   actually filled, once the broker says it's done.
@@ -110,12 +110,12 @@ They also all follow the same hard-won rules about orders — learned from real 
 
 ## What the browser does
 
-A single-page app with a tab per view. **Each tab only runs while you're looking at it** —
+A single-page app with a tab per view. **Each tab only runs while you're looking at it**,
 the sector scanner isn't consuming anything while you're on the Execution page.
 
 Charts are canvas-based for speed. Live updates modify the last candle in place rather than
-redrawing, and your zoom is preserved as prices come in — nothing is more annoying than a
-chart that jumps while you're reading it.
+redrawing, and your zoom is preserved as prices come in, because nothing is more annoying
+than a chart that jumps while you're reading it.
 
 **Where money is concerned, the browser is never the source of truth.** Your P&L is
 recalculated from your actual fills rather than trusting the broker's blended average
@@ -145,7 +145,7 @@ scripts/run-frontend.ps1    # browser app → :5173
 ```
 
 Before any change is considered done: the Go code must build, pass vet, and pass its tests;
-the front end must type-check and build. Then the important one — **open the Execution page
+the front end must type-check and build. Then the important one, **open the Execution page
 and confirm it still streams and still places orders correctly**, because that's the part
 with real money behind it.
 
