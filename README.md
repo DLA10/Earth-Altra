@@ -44,59 +44,91 @@ finding out which ideas actually work, on live market data, without risking a ce
 ```
 
 Go backend (one SIP feed, in-memory candles, WebSocket fan-out, chi REST) · React front
-end · LightGBM where a model earns its place. That's the whole "how" — the rest of this
-page is what it *does*.
+end · LightGBM where a model earns its place. That's the whole "how" here — the rest of
+this page is what it *does*.
+
+*Curious how it's built?* → **[Architecture in detail](ARCHITECTURE.md)**
 
 ---
 
 ## What you can actually do with it
 
-```
- ┌─ TRADE ─────────────────────────────────────────────────────────────────────┐
- │  EXECUTION page — real money, every order confirmed by you                  │
- │                                                                             │
- │   market · limit · stop-loss · trailing stop ($ or %) · OCO · bracket       │
- │   draw-order: click a price on the live chart, get only the order types     │
- │               that make sense there — while candles are still forming       │
- │   guards:    blocks the classic disaster (a BUY limit above market fills    │
- │               instantly), blocks overselling, caps order size — checked in  │
- │               the panel, again at the confirm modal, again on the server    │
- │   read:      Bollinger + RSI · STRONG/WEAK/WAIT signal badge · your entry   │
- │               marked on the chart · news with sentiment · 1m→1Y ranges      │
- │   watch:     live equity & day P&L · buying power · cancel-all kill switch  │
- └─────────────────────────────────────────────────────────────────────────────┘
-        ▲ decide what to trade                    ▲ decide what to trade
-        │                                          │
- ┌─ FIND: momentum & dips ──────────┐   ┌─ FIND: sectors & catalysts ─────────┐
- │  MOVERS page                      │   │  DECEPTICON page                    │
- │                                   │   │                                     │
- │  top gainers / losers, live       │   │  39 sector departments, each opens: │
- │  ─────────────────────────────    │   │   • summary card — how the whole    │
- │  RISERS  — climbing off the open  │   │     sector is moving, its leaders   │
- │            scored on distance,    │   │   • mini-chart heatmap of every     │
- │            RVOL, vs-VWAP, trend   │   │     ticker, click to enlarge        │
- │  FADERS  — rolling over: this is  │   │   • catalyst flags — WHY it moves   │
- │            where dip entries live │   │   • high-RVOL markers               │
- │  per row: range · vs VWAP ·       │   │  catalyst radar across all 39, so   │
- │  signal · entry · exit read       │   │  a waking sector shows up early     │
- │  click any row → live chart       │   │  ~683 tickers scanned continuously  │
- └───────────────────────────────────┘   └─────────────────────────────────────┘
+### 🛡️ The safety layer — *the part that matters most*
 
- ┌─ REVIEW ────────────────────┐  ┌─ WATCH ──────────┐  ┌─ EXPERIMENT ────────┐
- │  HISTORY  every fill, from  │  │  WATCHLIST       │  │  one page per paper  │
- │           the broker        │  │  stacked live    │  │  desk: positions,    │
- │  METRICS  realized P&L      │  │  charts, drag    │  │  P&L, every closed   │
- │           rebuilt from      │  │  to reorder,     │  │  trade and why it    │
- │           actual fills      │  │  opening-move    │  │  closed              │
- │           — not estimates   │  │  ranking         │  │                      │
- └─────────────────────────────┘  └──────────────────┘  └──────────────────────┘
-```
+- **Nothing trades itself.** Every real order stops at a confirm modal. You always press
+  the button.
+- **The fat-finger catcher.** A *buy* limit placed above the market looks patient but fills
+  instantly — that mistake is the reason this exists. It's blocked in the panel, explained
+  in plain English at the confirm step, and re-checked on the server before it can reach
+  the broker.
+- **Can't sell what you don't have**, can't exceed your order-size cap, can't put a stop on
+  the wrong side of the price.
+- **One-click kill switch** cancels every open order at once.
+- **Paper and real money are physically separate** — different accounts, different keys,
+  no shared path between them.
 
-**The short version:** DECEPTICON and MOVERS tell you *what* is in play and why — one by
-sector and catalyst, the other by momentum and dips. The Execution page is where you act
-on it, with every order type you need and a guard on each. History and Metrics tell you
-honestly how it went, rebuilt from real fills rather than from what you meant to do. And
-the desk pages are the laboratory running beside all of it.
+### 💹 The execution layer — *where you actually trade*
+
+- **Every order type you need:** market, limit, stop-loss, trailing stop (dollars or
+  percent), OCO (target and stop together, first one wins), and bracket (entry + target +
+  stop submitted as one).
+- **Draw your order on the chart.** Click the price you want while candles are still
+  forming — the popup offers only the order types that make sense at that level.
+- **Buy in shares or in dollars**, whichever way you think.
+- **Live positions and P&L** beside the chart, with your entry marked as a line so you
+  always see where you stand.
+- **Account header** with equity, day P&L and buying power, updating on every tick rather
+  than every few seconds.
+
+### 🔍 The intelligence layer — *what's worth looking at right now*
+
+**MOVERS — momentum and dips**
+
+- Whole-market **top gainers and losers**, live.
+- **Risers** — names climbing off the open, scored on how far they've come, how unusual the
+  volume is, and where they sit against VWAP. One number for "is this real, or noise?"
+- **Faders** — the same treatment for names rolling over. This is where dip entries come
+  from.
+- Every row shows range, distance from VWAP, a signal grade, a suggested entry and an exit
+  read.
+- Click any row for a live chart — even of a stock nobody was tracking a second ago.
+
+**DECEPTICON — sectors and catalysts**
+
+- ~683 tickers watched across **39 sector departments** (AI infrastructure, semis, quantum,
+  nuclear, biotech, defence…).
+- Each department opens into a **summary card** — is the whole sector moving, and who's
+  leading it?
+- A **mini-chart heatmap** of every ticker inside, click to enlarge.
+- **Catalyst flags** tell you *why* something is moving, not just that it is.
+- **High-volume markers** for names trading far above their normal.
+- A **catalyst radar** across all 39, so a sector waking up shows up before it's obvious.
+
+### 🧭 The assist layer — *help deciding, never deciding for you*
+
+- **Bollinger bands and RSI** on the chart, with a synced RSI pane below it.
+- A **signal badge** grading the setup **STRONG / WEAK / WAIT** — strong only when two
+  independent signals agree.
+- **News with sentiment** for whatever you're holding, plus a one-click "why is it moving"
+  summary.
+- **Any timeframe:** 1-, 5- or 10-minute intraday, or a week to a year of history.
+- These inform you. **None of them can place an order.**
+
+### 📒 The receipts layer — *what actually happened*
+
+- **History** — every fill, straight from the broker. Not a local guess.
+- **Metrics** — realised P&L rebuilt from actual fills, so partial fills and averaging
+  can't quietly distort the numbers.
+- **Watchlist** — your names as stacked live charts, drag to reorder, ranked by how far
+  they've moved since the open.
+
+### 🧪 The laboratory — *the experiments running beside you*
+
+- **Four strategies trading paper accounts**, each with its own page showing open
+  positions, P&L, and every closed trade with the reason it closed.
+- They share your market data feed but **can never touch your money**.
+- Every decision is written down so it can be replayed and judged later — which is how two
+  ideas already got killed instead of shipped.
 
 ## The paper desks
 
