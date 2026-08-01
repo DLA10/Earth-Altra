@@ -7,6 +7,10 @@ Paper account · 534-name universe · fires roughly once every other day · flat
 
 ---
 
+![SURGER](../docs/img/surger.png)
+
+*The SURGER page: the three detectors keep separate books, so their records can be compared directly.*
+
 ## The idea
 
 Most of the other desks here are betting on things coming *back*: a gap closing, a price

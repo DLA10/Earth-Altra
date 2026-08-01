@@ -7,6 +7,10 @@ Paper account · 22 volatile names · holds for minutes · flat every night.
 
 ---
 
+![BREADCRUMBS](../docs/img/breadcrumbs.png)
+
+*The Breadcrumbs desk page: model probability and entry slippage recorded per trade, alongside the running $25-cut experiment.*
+
 ## The idea
 
 Volatile stocks twitch constantly. Most of those twitches are noise, but some carry on

@@ -1,11 +1,25 @@
 # Earth-Altra: a quantitative trading platform for mean reversion with ML pipelines
 
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![React](https://img.shields.io/badge/React-18.3-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)
+![Python](https://img.shields.io/badge/Python-ML%20pipelines-3776AB?logo=python&logoColor=white)
+![LightGBM](https://img.shields.io/badge/LightGBM-gradient%20boosting-9ACD32)
+![Alpaca](https://img.shields.io/badge/Alpaca-SIP%20real--time-FFD43B)
+![Paper](https://img.shields.io/badge/strategies-paper%20accounts%20only-brightgreen)
+
 A real-money US-equity terminal, statistical mean reversion, LightGBM gates, and a rule
 that nothing ships until the evidence says so.
 
 > **The one hard rule:** the user's money is real; **every strategy runs on its own paper
 > account with its own keys.** No strategy has a code path to the real account, and nothing
 > auto-trades real money. Every real order passes a confirm modal. Not financial advice.
+
+![The Execution page](docs/img/execution.png)
+
+*The Execution page: live candles with Bollinger bands and a synced RSI pane, the order
+panel with every order type, open positions, and a header marking equity and day P&L to
+the streaming price.*
 
 ---
 
@@ -92,6 +106,9 @@ this page is what it *does*.
   read.
 - Click any row for a live chart, even of a stock nobody was tracking a second ago.
 
+![The Movers page](docs/img/movers.png)
+
+
 **DECEPTICON, sectors and catalysts**
 
 - ~683 tickers watched across **39 sector departments** (AI infrastructure, semis, quantum,
@@ -102,6 +119,9 @@ this page is what it *does*.
 - **Catalyst flags** tell you *why* something is moving, not just that it is.
 - **High-volume markers** for names trading far above their normal.
 - A **catalyst radar** across all 39, so a sector waking up shows up before it's obvious.
+
+![The DECEPTICON scanner](docs/img/decepticon.png)
+
 
 ### 🧭 The assist layer: *help deciding, never deciding for you*
 

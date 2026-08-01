@@ -7,6 +7,10 @@ Paper account · holds for minutes · hundreds of trades a day · flat every nig
 
 ---
 
+![REVERTER](../docs/img/ridp.png)
+
+*The RIDP desk page, where REVERTER lives alongside RIDER and DIPPER.*
+
 ## The idea
 
 Over a few minutes, a stock has a "normal" level: roughly its average over the last

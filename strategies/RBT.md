@@ -7,6 +7,10 @@ Paper account · scans once a day · holds for days · trades long **and** short
 
 ---
 
+![RBT](../docs/img/rbt.png)
+
+*The RBT desk page: open pairs positions with their targets and stops, and every closed trade with the reason it closed.*
+
 ## The idea
 
 Some pairs of stocks genuinely belong together: same business, same customers, same
