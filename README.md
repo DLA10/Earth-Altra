@@ -49,56 +49,54 @@ page is what it *does*.
 
 ---
 
-## The terminal (this is the part that trades real money)
+## What you can actually do with it
 
-**Every order type you actually need, with a guard on each one.**
+```
+ ┌─ TRADE ─────────────────────────────────────────────────────────────────────┐
+ │  EXECUTION page — real money, every order confirmed by you                  │
+ │                                                                             │
+ │   market · limit · stop-loss · trailing stop ($ or %) · OCO · bracket       │
+ │   draw-order: click a price on the live chart, get only the order types     │
+ │               that make sense there — while candles are still forming       │
+ │   guards:    blocks the classic disaster (a BUY limit above market fills    │
+ │               instantly), blocks overselling, caps order size — checked in  │
+ │               the panel, again at the confirm modal, again on the server    │
+ │   read:      Bollinger + RSI · STRONG/WEAK/WAIT signal badge · your entry   │
+ │               marked on the chart · news with sentiment · 1m→1Y ranges      │
+ │   watch:     live equity & day P&L · buying power · cancel-all kill switch  │
+ └─────────────────────────────────────────────────────────────────────────────┘
+        ▲ decide what to trade                    ▲ decide what to trade
+        │                                          │
+ ┌─ FIND: momentum & dips ──────────┐   ┌─ FIND: sectors & catalysts ─────────┐
+ │  MOVERS page                      │   │  DECEPTICON page                    │
+ │                                   │   │                                     │
+ │  top gainers / losers, live       │   │  39 sector departments, each opens: │
+ │  ─────────────────────────────    │   │   • summary card — how the whole    │
+ │  RISERS  — climbing off the open  │   │     sector is moving, its leaders   │
+ │            scored on distance,    │   │   • mini-chart heatmap of every     │
+ │            RVOL, vs-VWAP, trend   │   │     ticker, click to enlarge        │
+ │  FADERS  — rolling over: this is  │   │   • catalyst flags — WHY it moves   │
+ │            where dip entries live │   │   • high-RVOL markers               │
+ │  per row: range · vs VWAP ·       │   │  catalyst radar across all 39, so   │
+ │  signal · entry · exit read       │   │  a waking sector shows up early     │
+ │  click any row → live chart       │   │  ~683 tickers scanned continuously  │
+ └───────────────────────────────────┘   └─────────────────────────────────────┘
 
-- **Market** buy/sell in shares or dollars · **limit** orders that wait for your price ·
-  **stop-loss** · **trailing stop** in dollars or percent · **OCO** (take-profit and
-  stop-loss on a held position, whichever hits first) · **bracket** (entry + target + stop
-  submitted as one).
-- **Draw your order on the chart.** Click a price level while candles are still forming
-  and the popup offers only the order types that make sense at that price — set a resting
-  limit, a stop, or a bracket by pointing at where you want it.
-- **Fat-finger protection at every layer.** The classic disaster is a *buy* limit set
-  *above* the market: it looks like a patient order and fills instantly. The panel blocks
-  it, the confirm modal spells out the direction rule in plain language, and the backend
-  re-checks before anything reaches the broker. Overselling and oversized orders are
-  refused the same way.
-- **Live chart with decision aids** — Bollinger bands and a time-synced RSI pane, a signal
-  badge that grades the setup STRONG / WEAK / WAIT, a green line marking your entry, and
-  1m/5m/10m intraday or 1W/1M/6M/1Y historical ranges. Indicators inform; they never place
-  an order.
-- **News beside the chart**, headlines with sentiment for whatever you're holding, plus a
-  one-click "why is it moving" summary.
-- **Live account header** — equity and day P&L marked to the streaming price between REST
-  polls, with cost basis rebuilt from actual fills, plus a **cancel-all kill switch**.
+ ┌─ REVIEW ────────────────────┐  ┌─ WATCH ──────────┐  ┌─ EXPERIMENT ────────┐
+ │  HISTORY  every fill, from  │  │  WATCHLIST       │  │  one page per paper  │
+ │           the broker        │  │  stacked live    │  │  desk: positions,    │
+ │  METRICS  realized P&L      │  │  charts, drag    │  │  P&L, every closed   │
+ │           rebuilt from      │  │  to reorder,     │  │  trade and why it    │
+ │           actual fills      │  │  opening-move    │  │  closed              │
+ │           — not estimates   │  │  ranking         │  │                      │
+ └─────────────────────────────┘  └──────────────────┘  └──────────────────────┘
+```
 
-## MOVERS — momentum and dips, ranked
-
-The page for deciding *what* to trade. Whole-market **top gainers and losers**, then the
-scored tables:
-
-- **Risers** — names climbing off the open, scored on distance travelled, relative volume,
-  position versus VWAP and trend, so you can tell a real move from a twitch.
-- **Faders** — the same treatment for names rolling over, which is where dip entries live.
-- Each row carries **range, vs-VWAP, a signal grade, an entry level and an exit read** —
-  and clicking it opens a live chart of that symbol, even one nobody was tracking a second
-  ago (the backend starts streaming it on demand).
-
-## DECEPTICON — the sector scanner
-
-An event-driven scan of ~683 tickers across **39 sector departments** (AI infrastructure,
-semis, quantum, nuclear, biotech, defence…). Each department expands into:
-
-- a **summary card** — how the whole sector is moving right now, and its top movers;
-- a **mini-chart heatmap** of every ticker in it, click-to-enlarge into a live chart;
-- **catalyst flags** on each ticker (what's driving it) and a **high-RVOL** marker for
-  unusual volume;
-- a **catalyst radar** across all departments, so a sector waking up is visible before it
-  shows up in the price.
-
----
+**The short version:** DECEPTICON and MOVERS tell you *what* is in play and why — one by
+sector and catalyst, the other by momentum and dips. The Execution page is where you act
+on it, with every order type you need and a guard on each. History and Metrics tell you
+honestly how it went, rebuilt from real fills rather than from what you meant to do. And
+the desk pages are the laboratory running beside all of it.
 
 ## The paper desks
 
@@ -121,6 +119,8 @@ afternoon means nothing. Each has four independent ways out — the target, a da
 stop, an emergency stop resting at the exchange, and a hard five-session deadline — so
 nothing drifts forever. A recent example: **GOOGL, held two sessions, +$709.**
 
+→ **[Read more about RBT](strategies/RBT.md)**
+
 ### REVERTER — the twitch trader
 
 **The idea:** within a single minute, price overshoots its own short-term average. Buy the
@@ -135,6 +135,8 @@ often answers questions in *days* instead of months — and it already answered 
 edge is real in the **first 30 minutes** and negative after 10:00, a pattern that has now
 repeated for eight straight sessions. That finding is worth more than the P&L.
 
+→ **[Read more about REVERTER](strategies/REVERTER.md)**
+
 ### BREADCRUMBS — the machine-learned scalper
 
 **The idea:** in volatile names, a short-lived move is often predictable enough to take a
@@ -148,6 +150,8 @@ from the broker's actual fill price rather than what it hoped to get. It's also 
 twin that keeps trading uncut, so "does this rule help?" is settled by evidence on a fixed
 date instead of by opinion.
 
+→ **[Read more about BREADCRUMBS](strategies/BREADCRUMBS.md)** — including how the model is trained and what it looks at
+
 ### SURGER — continuation detection
 
 **The idea:** a stock already climbing with unusual persistence often keeps going. Three
@@ -157,55 +161,7 @@ book and its own trailing leash (tight for short drifts, wide for day-long waves
 `srg1_/srg2_/srg3_` order tags so the three can never be confused. Fires roughly once
 every other day by design; flat weeks cost nothing.
 
----
-
-## How a model actually decides (BREADCRUMBS)
-
-```
- 1-min bars, RTH only, 22 volatile names          ← never the still-forming bar
-            │
-            ▼
- FEATURES  9 scale-free numbers per bar
-   Z_Score      how stretched vs its own recent mean
-   RSI_5 · RSI_14   short & standard momentum
-   ROC_3 · ROC_10   rate of change, two horizons
-   ATR_Ratio    is volatility expanding or calming?
-   MACD_Hist    momentum turning
-   Z_BB         position inside the Bollinger band
-   Vol_Ratio    volume vs its own average
-            │
-            ▼
- LABEL  triple barrier, 5-min horizon           ← what "good" means, decided up front
-   did +0.57% arrive BEFORE −0.71%?  →  1 / 0
-            │
-            ▼
- TRAIN  LightGBM classifier, pooled across all 22 names
-   ~205,000 labelled bars · retrains weekly on its own fresh outcomes
-            │
-            ▼
- SERVE  probability per bar, 0.00 → 1.00
-            │
-            ▼
- THREE GATES — all must agree
-   prob ≥ 0.65        model conviction
-   Close > EMA-100    with the trend, not against it
-   |Close − VWAP| ≤ 2σ  not already extended
-            │
-            ▼
- EXECUTE  fixed plan, decided before entry
-   target +0.57%  →  arms a 0.2% trailing stop, floored at the target
-   hard stop −0.71%      ·  $25 dollar-cut  ·  flat by 15:59
-            │
-            ▼
- JOURNAL  probability, signal price, entry slippage, best/worst excursion
-          → replayed later to grade the model, not just the P&L
-```
-
-**RBT uses the same shape on a slower clock:** daily bars → features
-`Z_5 · Z_GARCH · ATR_Ratio · BB_Width · Rel_Vol · RSI_14` → label "did the spread reach its
-mean before a 1.5×ATR stop?" → LightGBM probability → the top 5 by probability get the
-five slots. Training labels are generated at the *same* 2σ stretch the live scorer sees,
-so the probability is calibrated on exactly the setups it will be asked to judge.
+→ **[Read more about SURGER](strategies/SURGER.md)**
 
 ---
 
@@ -237,8 +193,12 @@ file and are never committed.
 
 ## Going deeper
 
-`CLAUDE.md` is the maintained technical reference — architecture, every desk's dials, and
-the operations playbook. Study write-ups: `RUBBER_BAND_TRADING.md`, `SURGER_V2.md`,
+**Per-strategy pages** — plain-language, one each:
+[RBT](strategies/RBT.md) · [REVERTER](strategies/REVERTER.md) ·
+[BREADCRUMBS](strategies/BREADCRUMBS.md) · [SURGER](strategies/SURGER.md)
+
+`CLAUDE.md` is the maintained technical reference — architecture, every desk's dials and
+the operations playbook. Research write-ups: `RUBBER_BAND_TRADING.md`, `SURGER_V2.md`,
 `HARVEST_STUDY.md`, `KNIFE_STUDY.md`, `REGIME_DETECTOR_STUDY.md`, `REVERTER_FILTERS.md`.
 Retired systems: `DIP_RISE_ARCHIVE.md`, `SNDK_RETIREMENT.md`, `AI_QUANT_LOG_DIGEST.md`.
 

@@ -1,7 +1,9 @@
 # SURGER v2 — continuation detectors (validated + deployed 2026-07-21)
 
-**Status: LIVE (paper)** — three detector variants trade the **dip+rise paper account**
-(`PAPER_DIP_*`) with strict `srg1_/srg2_/srg3_` client-order-id attribution.
+**Status: LIVE (paper)** — three detector variants trade the **`PAPER_DIP_*` paper
+account** with strict `srg1_/srg2_/srg3_` client-order-id attribution. (That account was
+shared with the dip+rise desk until it was removed 2026-07-31; SURGER now owns it
+outright — the key names were kept so no live book had to migrate.)
 Backend: `internal/surger` (detect.go = math, surger.go = order lifecycle).
 UI: the SURGER section on the Dip+Rise page. Journal: `backend/data/surger/<day>.jsonl`
 + `state.json`. Env: `SURGER_LIVE` (true), `SURGER_NOTIONAL` (5000), `SURGER_SLOTS`
@@ -78,7 +80,8 @@ discount in mind. Full tables: scratchpad `exit_compare_results.json`.
 - Quant `Rehydrate` skips `srg*` coids (foreignDeskPrefixes) → a restart can never adopt
   SURGER's positions (the 2026-07-13 incident class).
 - SURGER enters a symbol only when the ACCOUNT holds zero shares of it → it can never
-  touch a dip+rise position and no opposite-side resting order can wash-trade it.
+  touch a sibling variant's position or an orphaned share, and no opposite-side resting
+  order can wash-trade it.
 - Exits sell exactly SURGER's own quantity (never account-wide).
 - No-ghost ledger: every order journaled to state BEFORE placement, settled to a
   terminal fill state after; in-flight orders are settled at boot; partial exits keep
