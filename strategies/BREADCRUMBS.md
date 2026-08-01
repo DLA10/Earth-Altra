@@ -17,44 +17,55 @@ asks how often that exact picture led to a small win rather than a small loss.
 
 ## How it decides
 
-```
- 1-minute bars, regular hours, 22 volatile stocks     ← never the bar still forming
-            │
-            ▼
- FEATURES: 9 simple measurements of the last few minutes
-   Z_Score      how far from its own recent average
-   RSI_5, RSI_14    momentum, short and standard
-   ROC_3, ROC_10    how fast it's moving, two horizons
-   ATR_Ratio    is volatility building or calming?
-   MACD_Hist    is momentum turning?
-   Z_BB         where it sits inside its Bollinger band
-   Vol_Ratio    volume against its own normal
-            │
-            ▼
- LABEL: decided in advance, so "good" can't be redefined later
-   Looking 5 minutes ahead: did +0.57% arrive BEFORE −0.71%?   →  yes / no
-            │
-            ▼
- TRAIN: LightGBM, one model pooled across all 22 names
-   ~205,000 labelled minutes · retrains itself weekly on fresh outcomes
-            │
-            ▼
- SCORE: every bar gets a probability from 0.00 to 1.00
-            │
-            ▼
- THREE GATES: all three must agree, or no trade
-   probability ≥ 0.65        the model is actually confident
-   price above its EMA-100   we're with the trend, not fighting it
-   within 2σ of VWAP         it hasn't already run away from us
-            │
-            ▼
- EXECUTE: the whole exit plan is fixed before entry
-   target +0.57%  →  switches on a 0.2% trailing stop, floored at the target
-   hard stop −0.71%     ·     $25 dollar-cut     ·     flat by 15:59
-            │
-            ▼
- JOURNAL: probability, intended price, actual fill, best and worst point reached
-           → so the model can be graded later, not just the P&L
+```mermaid
+flowchart TD
+    BARS["<b>1-minute bars</b><br/>regular hours, 22 volatile stocks<br/><i>the bar still forming is cut off first</i>"]
+
+    subgraph FEATS["FEATURES · 9 measurements of the last few minutes"]
+        direction LR
+        F1["<b>Z_Score</b><br/>distance from<br/>its own average"]
+        F2["<b>RSI_5 · RSI_14</b><br/>momentum, short<br/>and standard"]
+        F3["<b>ROC_3 · ROC_10</b><br/>speed of the move,<br/>two horizons"]
+        F4["<b>ATR_Ratio</b><br/>volatility building<br/>or calming"]
+        F5["<b>MACD_Hist</b><br/>momentum<br/>turning"]
+        F6["<b>Z_BB</b><br/>place inside the<br/>Bollinger band"]
+        F7["<b>Vol_Ratio</b><br/>volume vs<br/>its own normal"]
+    end
+
+    LABEL["<b>LABEL</b> · decided before training, so <i>good</i> cannot be redefined later<br/>looking 5 minutes ahead: did <b>+0.57%</b> arrive before <b>-0.71%</b>?"]
+    TRAIN["<b>TRAIN</b> · LightGBM, one model pooled across all 22 names<br/>~205,000 labelled minutes · retrains itself weekly on fresh outcomes"]
+    SCORE(["<b>probability</b><br/>0.00 to 1.00"])
+
+    subgraph GATES["THREE GATES · all must agree, or no trade"]
+        direction LR
+        G1{"model confidence<br/>at least 0.65"}
+        G2{"price above<br/>its EMA-100"}
+        G3{"within 2 sigma<br/>of VWAP"}
+    end
+
+    ENTER["<b>ENTER</b> · $5,000 slice"]
+    PLAN["<b>EXIT PLAN, fixed before entry</b><br/>target +0.57% arms a 0.2% trailing stop, floored at the target<br/>hard stop -0.71% · $25 dollar-cut · flat by 15:59"]
+    JRNL(["<b>JOURNAL</b><br/>probability, intended price, actual fill,<br/>best and worst point reached<br/><i>so the model can be graded later, not just the P and L</i>"])
+    SKIP(["no trade"])
+
+    BARS --> FEATS --> LABEL --> TRAIN --> SCORE --> GATES
+    GATES -->|"all three yes"| ENTER
+    GATES -->|"any no"| SKIP
+    ENTER --> PLAN --> JRNL
+    JRNL -.->|"feeds next week's retrain"| TRAIN
+
+    classDef data fill:#1f2937,stroke:#6b7280,color:#f9fafb
+    classDef feat fill:#0f2f3d,stroke:#38bdf8,color:#e0f2fe
+    classDef model fill:#2e1065,stroke:#a78bfa,color:#ede9fe
+    classDef gate fill:#422006,stroke:#f59e0b,color:#fef3c7
+    classDef good fill:#14532d,stroke:#22c55e,color:#dcfce7
+    classDef bad fill:#3b1d1d,stroke:#ef4444,color:#fee2e2
+    class BARS data
+    class F1,F2,F3,F4,F5,F6,F7 feat
+    class LABEL,TRAIN,SCORE model
+    class G1,G2,G3 gate
+    class ENTER,PLAN,JRNL good
+    class SKIP bad
 ```
 
 ## The rules

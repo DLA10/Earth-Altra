@@ -1,5 +1,13 @@
 # Earth-Altra: a quantitative trading platform for mean reversion with ML pipelines
 
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![React](https://img.shields.io/badge/React-18.3-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)
+![Python](https://img.shields.io/badge/Python-ML%20pipelines-3776AB?logo=python&logoColor=white)
+![LightGBM](https://img.shields.io/badge/LightGBM-gradient%20boosting-9ACD32)
+![Alpaca](https://img.shields.io/badge/Alpaca-SIP%20real--time-FFD43B)
+![Paper trading](https://img.shields.io/badge/strategies-paper%20accounts%20only-brightgreen)
+
 A real-money US-equity terminal, statistical mean reversion, LightGBM gates, and a rule
 that nothing ships until the evidence says so.
 
@@ -11,35 +19,57 @@ that nothing ships until the evidence says so.
 
 ## How it fits together
 
-```
-        ALPACA SIP FEED                    ALPACA TRADING + DATA REST
-   trades · quotes · 1-min bars          orders · account · positions · fills
-   one WebSocket for the whole app        history (1W/1M/6M/1Y) · assets · news
-                │                                        │
-                ▼                                        ▼
- ╔══════════════════════════════ GO BACKEND (:8080) ══════════════════════════════╗
- ║  candles.Engine      1/5/10-min OHLCV in memory · bad-tick guard · 1500 bars   ║
- ║  scanner             per-ticker stats: RVOL, VWAP, opening range, spread       ║
- ║  flow.Tracker        buy/sell pressure from the quote rule                     ║
- ║  hub.Hub             WebSocket fan-out · per-client (symbol, timeframe) subs   ║
- ║  api.Server (chi)    REST + server-side order validation                       ║
- ║  desks               RBT · RIDP · BREADCRUMBS · SURGER  (each own paper acct)  ║
- ╚════════════════════════════════════════════════════════════════════════════════╝
-          │  WebSocket /ws                                  │  REST /api/*
-          │  snapshot · candle · quote · trade_update        │  orders · account
-          │  account · positions · orders · scan             │  history · fills
-          ▼                                                  ▼  metrics · news
- ╔════════════════════════════ REACT + TYPESCRIPT (:5173) ════════════════════════╗
- ║  EXECUTION   live chart · draw-order · OrderPanel · positions · news · P&L     ║
- ║  MOVERS      market gainers/losers · Risers & Faders scoring · momentum + dip  ║
- ║  DECEPTICON  39 sector departments · catalyst radar · heatmap · mini-charts    ║
- ║  WATCHLIST   stacked live charts · opening-move ranking                        ║
- ║  HISTORY     every fill, from the broker      METRICS  realized-P&L analytics  ║
- ║  RBT · RIDP · BREADCRUMBS · SURGER   one read-only report page per desk        ║
- ╚════════════════════════════════════════════════════════════════════════════════╝
-                                       │
-                     every decision journaled → replayed → judged
-                     against a pre-registered bar before anything changes
+```mermaid
+flowchart TB
+    subgraph FEED["MARKET DATA"]
+        direction LR
+        SIP["Alpaca SIP WebSocket<br/><i>trades · quotes · 1-min bars</i>"]
+        BREST["Alpaca REST<br/><i>orders · account · history · news</i>"]
+    end
+
+    subgraph BACK["GO BACKEND  ·  :8080"]
+        direction LR
+        ENG["<b>Candle engine</b><br/>1/5/10-min OHLCV in memory<br/>bad-tick guard · 1,500 bars"]
+        SCAN["<b>Scanner</b><br/>RVOL · VWAP<br/>range · spread"]
+        FLOW["<b>Flow tracker</b><br/>buy/sell pressure"]
+        HUB["<b>WebSocket hub</b><br/>per-client subscriptions<br/>120ms / 150ms throttle"]
+        API["<b>REST API</b> (chi)<br/>server-side order validation"]
+        DESKS["<b>Paper desks</b><br/>RBT · REVERTER<br/>BREADCRUMBS · SURGER"]
+    end
+
+    subgraph FRONT["REACT + TYPESCRIPT  ·  :5173"]
+        direction LR
+        EXEC["<b>EXECUTION</b><br/>real money<br/>chart · draw-order · live PnL"]
+        FIND["<b>MOVERS + DECEPTICON</b><br/>momentum, dips<br/>39 sectors, 683 tickers"]
+        REVIEW["<b>HISTORY + METRICS</b><br/>fills and realised PnL"]
+        LABS["<b>DESK PAGES</b><br/>one per strategy"]
+    end
+
+    SIP --> ENG
+    ENG --> SCAN
+    ENG --> FLOW
+    ENG --> HUB
+    ENG --> DESKS
+    BREST --> API
+    API --> DESKS
+    HUB -->|"live prices"| EXEC
+    HUB --> FIND
+    API -->|"orders, one at a time"| EXEC
+    API --> REVIEW
+    API --> LABS
+    DESKS --> LABS
+    DESKS -.->|"journalled, replayable"| JRNL(["every decision recorded<br/>and judged against a<br/>pre-registered bar"])
+
+    classDef feed fill:#1f2937,stroke:#4b5563,color:#f9fafb
+    classDef go fill:#0f2f3d,stroke:#00ADD8,color:#e6f7ff
+    classDef ui fill:#1e1b3a,stroke:#61DAFB,color:#eef2ff
+    classDef money fill:#3b1d1d,stroke:#ef4444,color:#fee2e2
+    classDef note fill:#14532d,stroke:#22c55e,color:#dcfce7
+    class SIP,BREST feed
+    class ENG,SCAN,FLOW,HUB,API,DESKS go
+    class FIND,REVIEW,LABS ui
+    class EXEC money
+    class JRNL note
 ```
 
 Go backend (one SIP feed, in-memory candles, WebSocket fan-out, chi REST) · React front
