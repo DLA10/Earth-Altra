@@ -506,8 +506,9 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   signals, quarterly walk-forward) found ranks 1–7 all profitable and rank 8 sharply
   negative — the seats were the binding constraint, not the picking. `maxSlots` is also
   the position sizer (`equity/maxSlots`), so this halves position size rather than adding
-  exposure; above ~30 slots `math.Floor(budget/price)` starts silently dropping expensive
-  names. Positions and trades now record `rank`/`of_n` so the deeper picks can be graded.
+  exposure. Sizing headroom (measured, ~$100k equity, priciest tradable ASML ≈$1,630):
+  nothing sizes to ZERO shares until **62** slots, but at 40 five names buy <3 shares and
+  their stops become rounding error — ~30 practical ceiling, 62 hard. Positions and trades now record `rank`/`of_n` so the deeper picks can be graded.
 - **SURGER** (`internal/surger`): 3 intraday continuation detectors (C2 cusum / C1
   purity / SPECTRAL) over the 534-name universe, deployed 2026-07-21. Has its own page
   since 2026-07-31 and now owns the `PAPER_DIP_*` account outright (the dip desk it used

@@ -41,9 +41,13 @@ var probMin = func() float64 {
 // pipeline (8,837 signals, quarterly walk-forward) found ranks 1-7 all profitable and
 // rank 8 sharply negative, so the seats were the binding constraint, not the picking.
 //
-// Raised to 10 on 2026-08-02 (≈2 entries/day ≈ ranks 1-2). Deliberately not higher:
-// beyond ~30 slots the per-slot budget falls under the price of expensive names and
-// math.Floor(budget/price) silently drops them. Set RBT_MAX_SLOTS=5 to roll back.
+// Raised to 10 on 2026-08-02 (≈2 entries/day ≈ ranks 1-2). Headroom above that,
+// measured against the live book (~$100k equity; priciest tradable name ASML ≈ $1,630):
+// nothing sizes to ZERO shares until 62 slots, but granularity degrades well before that
+// — at 40 slots five names buy fewer than 3 shares, which makes their stops mostly
+// rounding error. So ~30 is the practical ceiling, 62 the hard one. Set RBT_MAX_SLOTS=5
+// to roll back. (An earlier version of this comment said ~30 was where names get dropped
+// entirely; that was wrong by half — rbt_test.go pins the real number.)
 var maxSlots = func() int {
 	if v := strings.TrimSpace(os.Getenv("RBT_MAX_SLOTS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -52,6 +56,11 @@ var maxSlots = func() int {
 	}
 	return 10
 }()
+
+// entryCutoffMin is the ET minute-of-day after which the 15:50 scan stops opening new
+// positions. Guards the sequential entry loop against running into the 16:00 close - see
+// the comment at the loop itself.
+const entryCutoffMin = 15*60 + 57
 
 // RbtUniverse holds the 100 co-moving tickers monitored by RBT.
 var RbtUniverse = []string{
@@ -776,6 +785,23 @@ func (m *Manager) runEntryScan(now time.Time) {
 		// the probability floor or an already-open symbol — "3rd of 9" stays honest.
 		for sigIdx, sig := range sigs {
 			if slotsLeft <= 0 {
+				break
+			}
+
+			// Wall-clock guard. Entries are placed SEQUENTIALLY and each one can wait up
+			// to 20s for a terminal fill state before its stop goes on, so a full book of
+			// free slots is minutes of work from a 15:50 scan. At the old 5 slots that was
+			// ~2 minutes and could not reach the close; at 10 it is ~4. Without this the
+			// loop would happily keep sending market orders past 16:00 into a shut market,
+			// and any future raise of maxSlots makes that worse. Stop opening at 15:57 and
+			// leave the rest for tomorrow - a skipped signal costs nothing, an order that
+			// rejects (or worse, queues to the next open unprotected) costs real money.
+			if hm := time.Now().In(m.etz); hm.Hour()*60+hm.Minute() >= entryCutoffMin {
+				log.Printf("rbt: entry cutoff %02d:%02d ET reached with %d slot(s) free - "+
+					"deferring the remaining %d candidate(s) to the next scan",
+					entryCutoffMin/60, entryCutoffMin%60, slotsLeft, len(sigs)-sigIdx)
+				m.journalEvent("entry_cutoff", "",
+					fmt.Sprintf("stopped at rank %d/%d, %d slots still free", sigIdx+1, len(sigs), slotsLeft))
 				break
 			}
 
