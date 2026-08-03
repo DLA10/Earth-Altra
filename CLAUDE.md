@@ -312,6 +312,8 @@ popups and stacked charts subscribe independently of the Execution chart.
 | `BC_DAILY_LOSS_CAP` | `500` | Halt NEW breadcrumbs entries at −cap (0 = disabled; .env currently 0 by operator choice — uncapped data collection) |
 | `SURGER_LIVE` / `SURGER_NOTIONAL` / `SURGER_SLOTS` | `true/5000/5` | SURGER lab on the DIP account (slice USD / slots per variant) |
 | `RBT_Z_ENTRY` | `2.0` | RBT entry stretch σ (original 2.5) |
+| `RBT_MAX_SLOTS` | `10` | RBT concurrent positions AND position sizer (was a hardcoded 5) |
+| `RBT_PROB_MIN` | `0.60` | RBT model probability floor (original 0.65) |
 | `RBT_MAX_CLUSTER` | `12` | RBT family size cap |
 | `RBT_COINT_P` / `RBT_MIN_FAMILY` | `0.10` / `2` | RBT family admission (originals 0.05 / 3) |
 | `RBT_UNIVERSE_PATH` | baseline JSON | RBT curated-universe file override |
@@ -497,7 +499,15 @@ All paper-only, one Alpaca paper account each, zero contact with the live path.
   zero-trade history was starvation, not breakage). Scans ONCE daily 15:50–16:00 ET;
   prices the universe via one REST snapshot (`SetDaySnapFn`) so universe size adds
   nothing to the SIP stream; streams only HELD positions. Entry `|z_spread| ≥ 2.0`, LGBM
-  prob ranks the top-5 slots; 1.5×ATR stop; nightly retrain 17:05 (45-min timeout).
+  prob ranks candidates and the free slots are filled best-first; 1.5×ATR stop; nightly
+  retrain 17:05 (45-min timeout). **Slots 5 → 10 on 2026-08-02** (`RBT_MAX_SLOTS`): with a
+  5-session hold, 5 slots freed ~1 seat/day, so the desk only ever took its TOP-RANKED
+  signal out of a median 10 candidates. A 5-year replay of its own pipeline (8,837
+  signals, quarterly walk-forward) found ranks 1–7 all profitable and rank 8 sharply
+  negative — the seats were the binding constraint, not the picking. `maxSlots` is also
+  the position sizer (`equity/maxSlots`), so this halves position size rather than adding
+  exposure; above ~30 slots `math.Floor(budget/price)` starts silently dropping expensive
+  names. Positions and trades now record `rank`/`of_n` so the deeper picks can be graded.
 - **SURGER** (`internal/surger`): 3 intraday continuation detectors (C2 cusum / C1
   purity / SPECTRAL) over the 534-name universe, deployed 2026-07-21. Has its own page
   since 2026-07-31 and now owns the `PAPER_DIP_*` account outright (the dip desk it used

@@ -164,9 +164,9 @@ idea is wrong.
 - **Scans once a day**, in the last ten minutes before the close. No intraday babysitting.
 - **199 liquid names**, screened for genuine cointegration, not a hunch list.
 - Enters only when a pair is stretched **2σ or more**; a LightGBM model ranks the
-  candidates so only the **top 5** get capital.
+  candidates so the best-scoring ones get capital.
 - **Trades both directions**: long the cheap leg, short the rich one.
-- **Five slots, equal weight** (~$20k each), so no single idea dominates the book.
+- **Ten slots, equal weight** (~$10k each), so no single idea dominates the book.
 
 **Why you'd want it:** it's the calm one. Positions are *meant* to sit for days, so a red
 afternoon means nothing. Each has four independent ways out, the target, a daily-close

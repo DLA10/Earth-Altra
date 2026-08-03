@@ -39,7 +39,7 @@ It's called rubber-band trading because that's the whole thesis: stretch, then s
   "given how this setup looks, how often did the gap actually close?"
             │
             ▼
-  Take the top 5 by that score. Fill the 5 slots. Done for the day.
+  Take the best by that score, fill whatever slots are free. Done for the day.
 ```
 
 ## The rules
@@ -50,7 +50,7 @@ It's called rubber-band trading because that's the whole thesis: stretch, then s
 | **When it trades** | once daily, 15:50–16:00 ET. Nothing intraday. |
 | **Entry** | gap stretched ≥ 2σ, ranked by model probability |
 | **Direction** | long the cheap leg, short the rich one (needs margin enabled) |
-| **Size** | 5 slots, equal weight, about $20k each, capped by account equity |
+| **Size** | 10 slots, equal weight, about $10k each, capped by account equity |
 | **Exit 1, target** | the gap returns to its average → take the profit |
 | **Exit 2, stop** | moves 1.5×ATR against us on a daily close → controlled loss |
 | **Exit 3, emergency** | a 2.5×ATR stop resting at the exchange, live around the clock |

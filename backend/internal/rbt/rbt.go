@@ -30,6 +30,29 @@ var probMin = func() float64 {
 	return 0.60
 }()
 
+// maxSlots is the concurrent-position cap AND the position sizer — each slot gets
+// equity/maxSlots (see runEntryScan). Raising it does NOT add exposure; it splits the
+// same equity into more, smaller positions.
+//
+// Was a hardcoded 5 from the desk's first commit, with no recorded rationale — it is the
+// one RBT dial the 2026-07-16 throughput pass never revisited. With a 5-session hold, 5
+// slots free roughly one seat a day, so the desk was only ever able to take its
+// TOP-RANKED signal out of a median 10 candidates. A 5-year replay of the desk's own
+// pipeline (8,837 signals, quarterly walk-forward) found ranks 1-7 all profitable and
+// rank 8 sharply negative, so the seats were the binding constraint, not the picking.
+//
+// Raised to 10 on 2026-08-02 (≈2 entries/day ≈ ranks 1-2). Deliberately not higher:
+// beyond ~30 slots the per-slot budget falls under the price of expensive names and
+// math.Floor(budget/price) silently drops them. Set RBT_MAX_SLOTS=5 to roll back.
+var maxSlots = func() int {
+	if v := strings.TrimSpace(os.Getenv("RBT_MAX_SLOTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 10
+}()
+
 // RbtUniverse holds the 100 co-moving tickers monitored by RBT.
 var RbtUniverse = []string{
 	"ADI", "AMD", "AMAT", "ASML", "AVGO", "INTC", "KLAC", "LRCX", "MCHP", "MPWR",
@@ -56,6 +79,12 @@ type Position struct {
 	StopID      string    `json:"stop_id"` // exchange-side catastrophic stop order ID
 	Age         int       `json:"age"`     // hold age in trading sessions
 	LastPx      float64   `json:"last_px,omitempty"` // report-time mark (engine, else broker) so the UI never shows a fake $0 P&L
+	// Rank is this signal's place in the day's probability-sorted candidate list, and
+	// OfN how many candidates the scan produced. Recorded so the books can answer "how
+	// far down the list does the desk actually reach, and do the deeper picks pay?" —
+	// the question the old 5-slot cap made unanswerable. 0 = booked before this existed.
+	Rank int `json:"rank,omitempty"`
+	OfN  int `json:"of_n,omitempty"`
 }
 
 // Trade holds one closed RBT trade record.
@@ -69,6 +98,8 @@ type Trade struct {
 	Reason     string    `json:"reason"` // "target" | "stop_loss" | "catastrophic_stop" | "time_exit" | "safety_exit"
 	OpenedAt   time.Time `json:"opened_at"`
 	ClosedAt   time.Time `json:"closed_at"`
+	Rank       int       `json:"rank,omitempty"`  // place in that day's ranked candidates
+	OfN        int       `json:"of_n,omitempty"`  // how many candidates the scan produced
 }
 
 // DaySnap is one symbol's session-so-far OHLCV aggregate, fetched via REST at scan time.
@@ -597,6 +628,8 @@ func (m *Manager) recordExit(sym string, exitPrice float64, reason string) {
 		Reason:     reason,
 		OpenedAt:   pos.OpenedAt,
 		ClosedAt:   time.Now(),
+		Rank:       pos.Rank,
+		OfN:        pos.OfN,
 	}
 
 	delete(m.open, sym)
@@ -724,7 +757,6 @@ func (m *Manager) runEntryScan(now time.Time) {
 		openCount := len(m.open)
 		m.mu.Unlock()
 
-		maxSlots := 5
 		slotsLeft := maxSlots - openCount
 		if slotsLeft <= 0 {
 			log.Printf("rbt: portfolio is full. Skipping new entries.")
@@ -739,7 +771,10 @@ func (m *Manager) runEntryScan(now time.Time) {
 			tradeBudget = equityBudget // cap at normal slot value
 		}
 
-		for _, sig := range sigs {
+		// sigs is already sorted best-probability-first, so the loop index IS the rank.
+		// It counts every candidate the scan produced, including ones skipped below for
+		// the probability floor or an already-open symbol — "3rd of 9" stays honest.
+		for sigIdx, sig := range sigs {
 			if slotsLeft <= 0 {
 				break
 			}
@@ -892,6 +927,8 @@ func (m *Manager) runEntryScan(now time.Time) {
 							ExitPrice:  exitPrice,
 							PnL:        pnl,
 							Reason:     "safety_exit",
+							Rank:       sigIdx + 1,
+							OfN:        len(sigs),
 							OpenedAt:   time.Now(),
 							ClosedAt:   time.Now(),
 						})
@@ -925,6 +962,8 @@ func (m *Manager) runEntryScan(now time.Time) {
 				StopLoss:    sig.StopLoss,
 				StopID:      stopID,
 				Age:         0,
+				Rank:        sigIdx + 1,
+				OfN:         len(sigs),
 			}
 
 			m.mu.Lock()
@@ -1165,7 +1204,7 @@ func (m *Manager) Report() ReportState {
 		TotalTrades: len(m.trades),
 		WinRate:     winRate,
 		OpenCount:   len(m.open),
-		MaxSlots:    5,
+		MaxSlots:    maxSlots,
 		Cash:        cash,
 		Equity:      equity,
 		Positions:   openPos,

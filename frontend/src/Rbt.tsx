@@ -12,6 +12,8 @@ interface RbtPosition {
   target_price: number;
   stop_loss: number;
   age: number;
+  rank?: number;
+  of_n?: number;
   last_px?: number; // backend mark (engine, else broker) — fallback when no quote streams
 }
 
@@ -25,6 +27,20 @@ interface RbtTrade {
   reason: string;
   opened_at: string;
   closed_at: string;
+  rank?: number;
+  of_n?: number;
+}
+
+// Rank of this signal in its day's probability-sorted candidate list. Trades booked
+// before ranking was recorded (pre 2026-08-02) carry no rank and show a dash.
+function rankCell(rank?: number, ofN?: number) {
+  if (!rank) return <td className="dim">—</td>;
+  return (
+    <td>
+      <b>{rank}</b>
+      {ofN ? <span className="dim"> / {ofN}</span> : null}
+    </td>
+  );
 }
 
 interface RbtReport {
@@ -208,6 +224,7 @@ export function Rbt() {
                 <th>P&amp;L (live)</th>
                 <th>Target (Mean)</th>
                 <th>Stop Loss (1.5x ATR)</th>
+                <th>Rank</th>
                 <th>Age</th>
               </tr>
             </thead>
@@ -232,6 +249,7 @@ export function Rbt() {
                     </td>
                     <td>${p.target_price.toFixed(2)}</td>
                     <td>${p.stop_loss.toFixed(2)}</td>
+                    {rankCell(p.rank, p.of_n)}
                     <td>{p.age}d</td>
                   </tr>
                 );
@@ -257,6 +275,7 @@ export function Rbt() {
                 <th>Entry Price</th>
                 <th>Exit Price</th>
                 <th>PnL</th>
+                <th>Rank</th>
                 <th>Exit Reason</th>
               </tr>
             </thead>
@@ -280,6 +299,7 @@ export function Rbt() {
                     <td className={cls(t.pnl)}>
                       <b>{money(t.pnl)}</b>
                     </td>
+                    {rankCell(t.rank, t.of_n)}
                     <td>
                       <span className={`reason-badge ${t.reason}`}>
                         {t.reason === "target"
