@@ -176,8 +176,12 @@ func (m *Manager) manageRider(now time.Time, sessionMin int) {
 			continue // exit in flight — nothing else may touch this position
 		}
 		// closed on the exchange (trailing stop filled)?
-		if closed, px := m.exchangeClosed(p); closed {
+		switch v, px := m.exchangeExit(p); v {
+		case exitOnExchange:
 			m.finalize(p, px, "exchange trailing stop filled")
+			continue
+		case exitNeverFilled:
+			m.dropUnfilled(p, "entry order terminal with zero fill")
 			continue
 		}
 		m.ensureProtection(p)

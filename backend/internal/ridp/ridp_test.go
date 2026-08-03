@@ -148,3 +148,51 @@ func TestDipperNoTriggerWithoutSetup(t *testing.T) {
 		t.Errorf("no setup expected on an uptrend (setup=%v triggered=%v)", d.Setup, d.Triggered)
 	}
 }
+
+// --- 2026-08-03 phantom-entry regression -------------------------------------------
+//
+// DIPPER sent a market buy for META at 09:31:06. The account still read flat at
+// 09:31:21, so the desk booked a "hard stop filled (exchange)" exit for a stop it had
+// never placed. The order then filled at 09:35:16 into a desk that had forgotten the
+// position. Every DIPPER entry sent near 09:31 has taken 67-250s to fill against a 12s
+// confirm window, so this fired on all of them and is why the desk could not hold a new
+// position for two weeks. A flat account must never on its own be read as a closed trade.
+
+func TestFlatAccountWithWorkingEntryIsNotAClosedTrade(t *testing.T) {
+	// the exact 09:31:21 state: order accepted, nothing filled yet
+	for _, st := range []string{"new", "accepted", "pending_new", "partially_filled", ""} {
+		if got := classifyUnprotectedFlat(true, 0, st); got != exitHeld {
+			t.Errorf("status %q with a working entry: got %v, want exitHeld — "+
+				"this is the state that invented the phantom trades", st, got)
+		}
+	}
+}
+
+func TestFlatAccountWithDeadEntryIsDroppedNotBooked(t *testing.T) {
+	for _, st := range []string{"canceled", "rejected", "expired"} {
+		if got := classifyUnprotectedFlat(true, 0, st); got != exitNeverFilled {
+			t.Errorf("status %q: got %v, want exitNeverFilled — a booking with no shares "+
+				"behind it must be dropped, not recorded as a trade", st, got)
+		}
+	}
+}
+
+func TestFlatAccountAfterARealFillIsAGenuineExit(t *testing.T) {
+	// shares did arrive once, so something really did close the position
+	if got := classifyUnprotectedFlat(true, 3, "filled"); got != exitOnExchange {
+		t.Errorf("filled entry then flat: got %v, want exitOnExchange", got)
+	}
+	if got := classifyUnprotectedFlat(true, 1, "canceled"); got != exitOnExchange {
+		t.Errorf("partial fill then canceled, now flat: got %v, want exitOnExchange — "+
+			"one filled share still means the position was real", got)
+	}
+}
+
+func TestUnreadableEntryOrderNeverGuesses(t *testing.T) {
+	// rate limited / API blip: doing nothing is the only safe answer
+	for _, st := range []string{"", "filled", "canceled"} {
+		if got := classifyUnprotectedFlat(false, 0, st); got != exitHeld {
+			t.Errorf("unreadable order (status %q): got %v, want exitHeld", st, got)
+		}
+	}
+}

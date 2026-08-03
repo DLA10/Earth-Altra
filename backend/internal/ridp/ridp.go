@@ -119,6 +119,11 @@ type Position struct {
 	// Closing state (2026-07-17 leak fix): an exit is IN FLIGHT. The position stays on
 	// the books until the account confirms flat — never finalize a fire-and-forget sell.
 	ExitID     string `json:"exit_id,omitempty"`
+
+	// EntryID is the entry order. Kept because a booking whose shares have not arrived
+	// yet is indistinguishable, from the account alone, from a position that has been
+	// closed - and guessing wrong invents trades. See exchangeExit.
+	EntryID string `json:"entry_id,omitempty"`
 	ExitReason string `json:"exit_reason,omitempty"`
 }
 
@@ -750,7 +755,8 @@ func (m *Manager) openPosition(strategy, sym string, qty float64, atr, hardStop 
 		}
 	}
 	pos := &Position{Strategy: strategy, Symbol: sym, Qty: fq, Entry: ap, OpenedAt: now,
-		Peak: ap, StopID: stopID, HardStop: hardStop, ATR: atr, LastDay: now.Format("2006-01-02")}
+		Peak: ap, StopID: stopID, HardStop: hardStop, ATR: atr, LastDay: now.Format("2006-01-02"),
+		EntryID: id}
 	m.mu.Lock()
 	m.open[sym] = pos
 	m.mu.Unlock()
@@ -900,22 +906,82 @@ func (m *Manager) finalize(pos *Position, exitPx float64, reason string) {
 	log.Printf("[ridp] %s EXIT %s @ $%.2f (%s) P&L $%.2f", pos.Strategy, pos.Symbol, exitPx, reason, tr.PnL)
 }
 
-// exchangeClosed reports whether a position was closed on the exchange (protective
-// order filled, or a manual liquidation). It reads the BATCHED per-tick snapshot — no
-// per-position API calls — and only when the shares are confirmed gone does it make one
-// Order lookup to record the stop's real fill price. fillPx 0 = unknown (finalize marks
-// at the last engine price). A missing/stale snapshot defers the decision to next tick.
-func (m *Manager) exchangeClosed(p *Position) (closed bool, fillPx float64) {
+type exitVerdict int
+
+const (
+	exitHeld        exitVerdict = iota // still on the account, or we cannot tell - do nothing
+	exitOnExchange                     // genuinely gone: a protective order or a flatten took it
+	exitNeverFilled                    // booked, but the entry order never delivered shares
+)
+
+// exchangeExit classifies a tracked position whose symbol reads flat at the broker.
+//
+// A flat account has TWO very different causes and the old code collapsed them into one.
+// Either the position was real and something closed it, or its entry order is still in
+// flight and the shares simply have not landed yet. Assuming the first invents trades:
+// on 2026-08-03 DIPPER sent a market buy for META at 09:31:06, the account still read
+// flat at 09:31:21, and the desk booked a "hard stop filled" exit for a stop that had
+// never been placed - then the order filled at 09:35:16 into a desk that had forgotten
+// the position, leaving an orphan for the ghost reconciler to clean up. Every DIPPER
+// entry sent near 09:31 has taken 67-250s to fill; awaitFill only waits 12s, so this
+// fired on every single one and is why the desk could not hold a new position.
+//
+// The entry order is the tiebreaker: shares that never existed cannot have been sold.
+func (m *Manager) exchangeExit(p *Position) (exitVerdict, float64) {
 	qty, ok := m.liveQty(p.Symbol)
 	if !ok || qty > 0 {
-		return false, 0
+		return exitHeld, 0
 	}
 	if p.StopID != "" {
 		if fq, ap, st, err := m.broker.Order(p.StopID); err == nil && st == "filled" && fq > 0 {
-			return true, ap
+			return exitOnExchange, ap
 		}
+		// Protected but flat: something else took it (ghost flatten, manual, EOD).
+		return exitOnExchange, 0
 	}
-	return true, 0
+	// Unprotected AND flat. Protection is deferred only while the entry is still working,
+	// so this is exactly the ambiguous case. Ask the entry order what happened.
+	if p.EntryID != "" {
+		fq, _, st, err := m.broker.Order(p.EntryID)
+		return classifyUnprotectedFlat(err == nil, fq, st), 0
+	}
+	// No entry id (booked before this field existed, or adopted): keep the old behaviour.
+	return exitOnExchange, 0
+}
+
+// classifyUnprotectedFlat decides what a flat account means for an unprotected position,
+// given what its entry order reports. Pure, so the judgement that used to invent trades
+// is testable without a broker.
+func classifyUnprotectedFlat(readOK bool, filledQty float64, status string) exitVerdict {
+	switch {
+	case !readOK:
+		// Cannot read the order - do NOT guess. The next tick reads it again; meanwhile
+		// ensureProtection keeps trying and the software exits still manage the position.
+		return exitHeld
+	case filledQty > 0:
+		// It did deliver shares at some point, so the position was real and is now gone.
+		return exitOnExchange
+	case status == "canceled" || status == "rejected" || status == "expired":
+		// Terminal with nothing filled: the position never existed.
+		return exitNeverFilled
+	default:
+		// Still working. The shares are coming. Booking anything now is fiction.
+		return exitHeld
+	}
+}
+
+// dropUnfilled removes a booking whose entry order died without delivering shares. It is
+// deliberately NOT a trade: nothing was ever bought, so there is nothing to record. The
+// re-entry cooldown is still stamped so the scanner cannot re-fire on the same name in
+// the same breath and churn.
+func (m *Manager) dropUnfilled(p *Position, why string) {
+	m.mu.Lock()
+	delete(m.open, p.Symbol)
+	m.lastExit[p.Symbol] = time.Now()
+	m.mu.Unlock()
+	m.saveState()
+	m.journal(p.Strategy, "error", p.Symbol, "entry never filled ("+why+") - booking dropped, no trade recorded")
+	log.Printf("ridp: %s %s entry never filled (%s) - booking dropped, no trade recorded", p.Strategy, p.Symbol, why)
 }
 
 // ensureProtection places the strategy's exchange-side protective order for a tracked
@@ -1104,8 +1170,12 @@ func (m *Manager) rehydrate() {
 	}
 	m.mu.Unlock()
 	for _, p := range positions {
-		if closed, px := m.exchangeClosed(p); closed {
+		switch v, px := m.exchangeExit(p); v {
+		case exitOnExchange:
 			m.finalize(p, px, "closed while offline (protective order)")
+			continue
+		case exitNeverFilled:
+			m.dropUnfilled(p, "entry order terminal with zero fill")
 			continue
 		}
 		if _, err := m.broker.PositionQty(p.Symbol); err != nil {

@@ -183,8 +183,12 @@ func (m *Manager) manageReverter(now time.Time) {
 		if m.resolveClosing(p) {
 			continue // exit in flight — nothing else may touch this position
 		}
-		if closed, px := m.exchangeClosed(p); closed {
+		switch v, px := m.exchangeExit(p); v {
+		case exitOnExchange:
 			m.finalize(p, px, "exchange stop filled (range broke)")
+			continue
+		case exitNeverFilled:
+			m.dropUnfilled(p, "entry order terminal with zero fill")
 			continue
 		}
 		m.ensureProtection(p)
