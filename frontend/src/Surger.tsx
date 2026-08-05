@@ -32,6 +32,12 @@ export function Surger() {
 
   const money = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`;
   const cls = (v: number) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+  // last_px is the desk's own latest completed-bar close, so it refreshes each minute and
+  // is absent only before the first bar of a freshly-entered name — fall back to the entry
+  // price then, which shows a flat $0 rather than a wrong number.
+  const markOf = (p: { last_px?: number; entry_price: number }) => p.last_px || p.entry_price;
+  const openPnl = (p: { last_px?: number; entry_price: number; qty: number }) =>
+    (markOf(p) - p.entry_price) * p.qty;
 
   if (err) return <div className="quant-page"><p className="neg">Error: {err}</p></div>;
   if (!rep) return <div className="quant-page"><p className="muted">Loading…</p></div>;
@@ -47,6 +53,9 @@ export function Surger() {
 
   // Go marshals nil slices as null — every per-variant list needs a guard
   const allOpen = rep.variants.flatMap((v) => (v.open ?? []).map((p) => ({ ...p, vname: v.name })));
+  const openTotal = allOpen.reduce((a, p) => a + openPnl(p), 0);
+  const realizedTotal = rep.variants.reduce((a, v) => a + v.realized_pnl, 0);
+  const todayTotal = rep.variants.reduce((a, v) => a + v.realized_today, 0);
   const allTrades = rep.variants
     .flatMap((v) => (v.trades ?? []).map((t) => ({ ...t, vname: v.name })))
     .sort((a, b) => (a.closed_at < b.closed_at ? 1 : -1))
@@ -78,34 +87,66 @@ export function Surger() {
         ))}
         {rep.variants.map((v) => (
           <Card
-            key={v.name + "_wr"}
-            label={`${v.name} — WR · trades · open`}
-            value={`${v.total_trades > 0 ? v.win_rate.toFixed(0) + "%" : "—"} · ${v.total_trades} · ${(v.open ?? []).length}`}
+            key={v.name + "_open"}
+            label={`${v.name} — open P&L · positions`}
+            value={`${money(v.unrealized_pnl)} · ${(v.open ?? []).length}`}
+            tone={cls(v.unrealized_pnl)}
           />
         ))}
+        {rep.variants.map((v) => (
+          <Card
+            key={v.name + "_wr"}
+            label={`${v.name} — WR · trades`}
+            value={`${v.total_trades > 0 ? v.win_rate.toFixed(0) + "%" : "—"} · ${v.total_trades}`}
+          />
+        ))}
+      </div>
+
+      <div className="quant-cards">
+        <Card label="DESK — today" value={money(todayTotal)} tone={cls(todayTotal)} />
+        <Card label="DESK — realized all-time" value={money(realizedTotal)} tone={cls(realizedTotal)} />
+        <Card label="DESK — open now" value={money(openTotal)} tone={cls(openTotal)} />
+        <Card
+          label="DESK — realized + open"
+          value={money(realizedTotal + openTotal)}
+          tone={cls(realizedTotal + openTotal)}
+        />
       </div>
 
       {allOpen.length > 0 && (
         <table className="quant-table" style={{ marginTop: 8 }}>
           <thead>
             <tr>
-              <th>Detector</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop</th>
-              <th>Peak</th><th>Slip bps</th><th>Opened</th>
+              <th>Detector</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th>
+              <th>P&amp;L</th><th>%</th><th>Stop</th><th>Peak</th><th>Slip bps</th><th>Opened</th>
             </tr>
           </thead>
           <tbody>
-            {allOpen.map((p) => (
-              <tr key={p.vname + p.symbol}>
-                <td>{p.vname}</td>
-                <td><b>{p.symbol}</b></td>
-                <td>{p.qty.toFixed(0)}</td>
-                <td>${p.entry_price.toFixed(2)}</td>
-                <td>${p.stop_px.toFixed(2)}</td>
-                <td>${p.peak.toFixed(2)}</td>
-                <td>{p.entry_slip_bps.toFixed(1)}</td>
-                <td>{fmtTime(p.opened_at)}</td>
-              </tr>
-            ))}
+            {allOpen.map((p) => {
+              const mark = markOf(p);
+              const pnl = openPnl(p);
+              const pct = ((mark - p.entry_price) / p.entry_price) * 100;
+              return (
+                <tr key={p.vname + p.symbol}>
+                  <td>{p.vname}</td>
+                  <td><b>{p.symbol}</b></td>
+                  <td>{p.qty.toFixed(0)}</td>
+                  <td>${p.entry_price.toFixed(2)}</td>
+                  <td>{p.last_px ? `$${mark.toFixed(2)}` : <span className="dim">—</span>}</td>
+                  <td className={cls(pnl)}><b>{money(pnl)}</b></td>
+                  <td className={cls(pnl)}>{pct >= 0 ? "+" : ""}{pct.toFixed(2)}%</td>
+                  <td>${p.stop_px.toFixed(2)}</td>
+                  <td>${p.peak.toFixed(2)}</td>
+                  <td>{p.entry_slip_bps.toFixed(1)}</td>
+                  <td>{fmtTime(p.opened_at)}</td>
+                </tr>
+              );
+            })}
+            <tr>
+              <td colSpan={5} style={{ textAlign: "right" }}><b>combined</b></td>
+              <td className={cls(openTotal)}><b>{money(openTotal)}</b></td>
+              <td colSpan={5} />
+            </tr>
           </tbody>
         </table>
       )}

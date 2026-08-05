@@ -358,6 +358,7 @@ export interface SurgerPosition {
   entry_slip_bps: number;
   high_px: number;
   low_px: number;
+  last_px?: number; // report-only mark from the desk's own last completed bar
 }
 export interface SurgerTrade {
   variant: number;

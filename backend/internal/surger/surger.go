@@ -68,7 +68,11 @@ type Position struct {
 	EntrySlip  float64   `json:"entry_slip_bps"`  // fill vs signal close
 	HighPx     float64   `json:"high_px"`
 	LowPx      float64   `json:"low_px"`
-	exiting    bool      // an exit is in flight — blocks concurrent exits AND ratchets
+	// LastPx is a REPORT-ONLY mark: the latest completed-bar close for this symbol,
+	// stamped on a COPY of the position in Report(). It is never persisted and never
+	// read by the trading path — the desk exits on its own series, not on this.
+	LastPx  float64 `json:"last_px,omitempty"`
+	exiting bool    // an exit is in flight — blocks concurrent exits AND ratchets
 }
 
 // Trade is a closed round-trip, pre-labeled for analysis.
@@ -926,10 +930,13 @@ func (m *Manager) Report() interface{} {
 		open := make([]Position, 0, len(b.Open))
 		var unreal float64
 		for sym, p := range b.Open {
+			// Copy first: the mark is for the page only and must not touch the live book.
+			pp := *p
 			if sr := m.series[sym]; sr != nil && len(sr.c) > 0 {
-				unreal += (sr.c[len(sr.c)-1] - p.EntryPrice) * p.Qty
+				pp.LastPx = sr.c[len(sr.c)-1]
+				unreal += (pp.LastPx - pp.EntryPrice) * pp.Qty
 			}
-			open = append(open, *p)
+			open = append(open, pp)
 		}
 		sort.Slice(open, func(i, j int) bool { return open[i].Symbol < open[j].Symbol })
 		trades := b.Trades
