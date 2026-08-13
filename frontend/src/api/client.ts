@@ -81,7 +81,9 @@ export const api = {
     req<NewsItem[]>(`/api/news?symbols=${encodeURIComponent(symbols.join(","))}&limit=${limit}`),
   pressure: (symbol: string) => req<Pressure>(`/api/pressure?symbol=${encodeURIComponent(symbol)}`),
   rvol: (symbol: string) =>
-    req<{ symbol: string; rvol: number; available: boolean }>(`/api/rvol?symbol=${encodeURIComponent(symbol)}`),
+    req<{ symbol: string; rvol: number; available: boolean; vwap?: number; day_high?: number; day_low?: number }>(
+      `/api/rvol?symbol=${encodeURIComponent(symbol)}`
+    ),
 
   // Trading readiness
   readiness: () => req<Readiness>("/api/readiness"),

@@ -175,6 +175,21 @@ body {
 .rvol-badge.cold { color: #8aa0b8; border-color: #2a3344; background: rgba(70, 90, 120, 0.14); }
 .rvol-badge.norm { color: #9aa4b2; background: rgba(70, 80, 100, 0.10); }
 
+/* VWAP badge on the Execution toolbar: same shape as the RVOL pill so the two read as
+   one strip. Colour carries the bias — above VWAP the average buyer today is ahead. */
+.vwap-badge {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #1b2230);
+  margin-left: 6px;
+}
+.vwap-badge.above { color: #a6f0c6; border-color: #22523a; background: rgba(16, 185, 129, 0.14); }
+.vwap-badge.below { color: #ffb4b4; border-color: #5a2626; background: rgba(239, 68, 68, 0.14); }
+.vwap-badge.at    { color: #ffe08a; border-color: #574a1f; background: rgba(234, 179, 8, 0.13); }
+
 /* Visual order placement: draw-a-line-to-trade */
 .chart-host { position: relative; }
 .draw-hint {

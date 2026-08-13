@@ -78,7 +78,7 @@ export default function ExecutionEngine() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [fills, setFills] = useState<Activity[]>([]);
 
-  const [rvol, setRvol] = useState<{ value: number; available: boolean } | null>(null);
+  const [rvol, setRvol] = useState<{ value: number; available: boolean; vwap?: number } | null>(null);
   const [drawMode, setDrawMode] = useState(false);
   const [draftPrice, setDraftPrice] = useState<number | null>(null);
   const [draftType, setDraftType] = useState<DrawType | null>(null);
@@ -175,7 +175,7 @@ export default function ExecutionEngine() {
     const load = () =>
       api
         .rvol(symbol)
-        .then((r) => alive && setRvol({ value: r.rvol, available: r.available }))
+        .then((r) => alive && setRvol({ value: r.rvol, available: r.available, vwap: r.vwap }))
         .catch(() => alive && setRvol(null));
     setRvol(null);
     load();
@@ -416,6 +416,26 @@ export default function ExecutionEngine() {
                   RVOL {rvol.value.toFixed(2)}×
                 </span>
               )}
+              {rvol?.available && rvol.vwap != null && rvol.vwap > 0 && lastPrice > 0 && (() => {
+                const gap = ((lastPrice - rvol.vwap) / rvol.vwap) * 100;
+                // Same +-0.1% band the Movers page uses, so the two pages never disagree
+                // about what "at VWAP" means.
+                const bias = gap >= 0.1 ? "above" : gap <= -0.1 ? "below" : "at";
+                const dot = bias === "above" ? "🟢" : bias === "below" ? "🔴" : "🟡";
+                const word = bias === "above" ? "above" : bias === "below" ? "below" : "at VWAP";
+                return (
+                  <span
+                    className={`vwap-badge ${bias}`}
+                    title={
+                      "VWAP is the average price everyone has paid for this stock today, weighted by volume. " +
+                      "Above it, buyers so far are in profit; below it, they are underwater. " +
+                      "Within 0.1% either way is treated as sitting on the line. Display only — it places no orders."
+                    }
+                  >
+                    VWAP ${rvol.vwap.toFixed(2)} {gap >= 0 ? "+" : ""}{gap.toFixed(2)}% {dot} {word}
+                  </span>
+                );
+              })()}
               <span className="tz-note">times: {TZ_LABEL}</span>
             </div>
             <div className="toolbar-right">

@@ -746,6 +746,12 @@ func (s *Server) rvol(w http.ResponseWriter, r *http.Request) {
 		if st, ok := s.Scanner.Get(sym); ok && st.RVOL > 0 {
 			out["available"] = true
 			out["rvol"] = st.RVOL
+			// Session VWAP and the day's range come free with the same lookup. The
+			// Execution toolbar shows price-vs-VWAP beside RVOL, and fetching them here
+			// avoids a second round trip (and a second endpoint) for the same state.
+			out["vwap"] = st.VWAP
+			out["day_high"] = st.DayHigh
+			out["day_low"] = st.DayLow
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
