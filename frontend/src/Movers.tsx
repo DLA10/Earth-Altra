@@ -138,7 +138,7 @@ export function Movers() {
         ) : (
           <table className="q-table">
             <thead>
-              <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>P&amp;L</th><th>vs VWAP</th><th>Exit read</th></tr>
+              <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>P&amp;L</th><th>VWAP</th><th>Exit read</th></tr>
             </thead>
             <tbody>
               {positions.map((p) => {
@@ -157,7 +157,12 @@ export function Movers() {
                     <td>{money(p.avg_entry_price)}</td>
                     <td>{money(p.current_price)}</td>
                     <td className={p.unrealized_pl >= 0 ? "pos" : "neg"}>{pct(p.unrealized_plpc * 100)}</td>
-                    <td className={isFinite(gap) ? (gap >= 0 ? "pos" : "neg") : ""}>{isFinite(gap) ? pct(gap) : "—"}</td>
+                    <td>
+                      {s ? money(s.vwap) : "—"}{" "}
+                      {isFinite(gap) ? (
+                        <span className={gap >= 0 ? "pos" : "neg"}>{pct(gap)}</span>
+                      ) : null}
+                    </td>
                     <td className="muted">{read}</td>
                   </tr>
                 );
@@ -216,7 +221,10 @@ function MoverPanel({ title, rows, own, kind, onFocus, sigColor }: {
                   <td>{own.has(s.symbol) ? "⭐ " : ""}<b>{s.symbol}</b></td>
                   <td className={s.chg_open_pct >= 0 ? "pos" : "neg"}>{pct(s.chg_open_pct)}</td>
                   <td className={s.rvol >= 2 ? "pos" : ""}>{s.rvol.toFixed(1)}×</td>
-                  <td className={gap >= 0 ? "pos" : "neg"}>{pct(gap)}</td>
+                  <td>
+                    {money(s.vwap)}{" "}
+                    <span className={gap >= 0 ? "pos" : "neg"}>{pct(gap)}</span>
+                  </td>
                   <td>{(rp * 100).toFixed(0)}%</td>
                   <td className={sigColor(sig)}><b>{sig}</b></td>
                   <td className="muted">
