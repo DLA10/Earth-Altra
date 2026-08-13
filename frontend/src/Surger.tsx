@@ -103,6 +103,16 @@ export function Surger() {
       </div>
 
       <div className="quant-cards">
+        {/* SURGER sizes the opposite way to RBT: a FIXED slice per trade, so adding a slot
+            adds new exposure rather than splitting existing exposure. Spelled out because
+            the two desks look similar on screen and behave differently. */}
+        <Card
+          label="Budget / trade — fixed slice"
+          value={`$${(rep.notional ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+          sub={`${rep.slots} slots x 3 books = $${(
+            (rep.notional ?? 0) * (rep.slots ?? 0) * 3
+          ).toLocaleString(undefined, { maximumFractionDigits: 0 })} max exposure`}
+        />
         <Card label="DESK — today" value={money(todayTotal)} tone={cls(todayTotal)} />
         <Card label="DESK — realized all-time" value={money(realizedTotal)} tone={cls(realizedTotal)} />
         <Card label="DESK — open now" value={money(openTotal)} tone={cls(openTotal)} />
@@ -132,7 +142,7 @@ export function Surger() {
                   <td><b>{p.symbol}</b></td>
                   <td>{p.qty.toFixed(0)}</td>
                   <td>${p.entry_price.toFixed(2)}</td>
-                  <td>{p.last_px ? `$${mark.toFixed(2)}` : <span className="dim">—</span>}</td>
+                  <td>{p.last_px ? `$${mark.toFixed(2)}` : <span className="muted">—</span>}</td>
                   <td className={cls(pnl)}><b>{money(pnl)}</b></td>
                   <td className={cls(pnl)}>{pct >= 0 ? "+" : ""}{pct.toFixed(2)}%</td>
                   <td>${p.stop_px.toFixed(2)}</td>
@@ -203,11 +213,14 @@ function heldFor(entryIso: string, exitIso: string): string {
   return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, "0")}m`;
 }
 
-function Card({ label, value, tone }: { label: string; value: string; tone?: string }) {
+function Card({ label, value, tone, sub }: {
+  label: string; value: string; tone?: string; sub?: string;
+}) {
   return (
     <div className="q-card">
       <div className="q-card-label">{label}</div>
       <div className={`q-card-value ${tone ?? ""}`}>{value}</div>
+      {sub ? <div className="q-card-label">{sub}</div> : null}
     </div>
   );
 }

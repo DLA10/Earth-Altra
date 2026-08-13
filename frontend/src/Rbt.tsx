@@ -34,11 +34,11 @@ interface RbtTrade {
 // Rank of this signal in its day's probability-sorted candidate list. Trades booked
 // before ranking was recorded (pre 2026-08-02) carry no rank and show a dash.
 function rankCell(rank?: number, ofN?: number) {
-  if (!rank) return <td className="dim">—</td>;
+  if (!rank) return <td className="muted">—</td>;
   return (
     <td>
       <b>{rank}</b>
-      {ofN ? <span className="dim"> / {ofN}</span> : null}
+      {ofN ? <span className="muted"> / {ofN}</span> : null}
     </td>
   );
 }
@@ -195,6 +195,15 @@ export function Rbt() {
           label="Slots Allocated"
           value={`${rep.open_count} / ${rep.max_slots}`}
         />
+        {/* The sizing rule is not obvious from a single number: maxSlots is BOTH the
+            concurrency cap and the position sizer, so the per-trade budget moves whenever
+            equity or the slot count changes. Showing the arithmetic makes that visible. */}
+        <Card
+          label={`Budget / trade — equity ÷ ${rep.max_slots} slots`}
+          value={`$${(rep.equity / Math.max(rep.max_slots, 1)).toLocaleString(undefined, {
+            minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          sub={`$${rep.equity.toLocaleString(undefined, { maximumFractionDigits: 0 })} ÷ ${rep.max_slots}`}
+        />
       </div>
 
       {/* Strategy Description Callout */}
@@ -320,11 +329,14 @@ export function Rbt() {
   );
 }
 
-function Card({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
+function Card({ label, value, tone = "", sub }: {
+  label: string; value: string; tone?: string; sub?: string;
+}) {
   return (
     <div className="q-card">
       <div className="q-card-label">{label}</div>
       <div className={`q-card-value ${tone}`}>{value}</div>
+      {sub ? <div className="q-card-label">{sub}</div> : null}
     </div>
   );
 }
